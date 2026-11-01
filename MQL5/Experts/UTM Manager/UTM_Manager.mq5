@@ -11,7 +11,7 @@
 //|   - settings profiles, trade insights                           |
 //+------------------------------------------------------------------+
 #property copyright "UTM Manager"
-#property version   "1.23"
+#property version   "1.25"
 #property description "UTM 交易管理器 - MT5 手动下单与持仓管理工具"
 #property description "拖动入场/止损/止盈线，自动手数计算，分批止盈，"
 #property description "忽略点差执行，本地跟单。"
@@ -69,6 +69,7 @@ input double                InpTP3Pct            = 0.0;           // 止盈3 平
 input double                InpTP4RR             = 4.0;           // 止盈4 盈亏比
 input double                InpTP4Pct            = 0.0;           // 止盈4 平仓%
 input bool                  InpServerSplitTP     = true;          // 多级止盈拆仓挂服务器（MT5 关掉也能止盈）
+input bool                  InpShowQuickTrade    = false;         // 面板显示「买入 / 卖出」快捷按钮
 input double                InpBEPlusRR          = 0.0;           // 保本额外锁定的盈亏比
 
 input group "=== UTM 交易管理器 : 持仓管理 ==="
@@ -130,6 +131,7 @@ void LoadInputs()
    g_set.tpRR[2] = InpTP3RR;  g_set.tpPct[2] = InpTP3Pct;
    g_set.tpRR[3] = InpTP4RR;  g_set.tpPct[3] = InpTP4Pct;
    g_set.serverSplitTP = InpServerSplitTP;
+   g_set.showQuickTrade = InpShowQuickTrade;
    g_set.defaultOrderMode = (int)InpDefaultOrderMode;
    g_set.beOffsetRR = InpBEPlusRR;
 

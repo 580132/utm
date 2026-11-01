@@ -21,6 +21,7 @@ private:
    bool              m_autoCollapsed;
    bool              m_memCollapsed;  // collapsed because of 省内存
    bool              m_memWas;       // previous 省内存 state (edge detect)
+   bool              m_fgSaved;      // we turned CHART_FOREGROUND off
    bool              m_visible;
    bool              m_sync;
    double            m_s;      // effective panel scale (DPI, capped to the chart height)
@@ -46,6 +47,7 @@ private:
 
    //--- content
    void              Build();
+   void              ApplyChartForeground();
    void              BuildHeader(int &y);
    void              BuildRisk(int &y);
    void              BuildStopLoss(int &y);
@@ -59,7 +61,7 @@ private:
 
 public:
                      CUtmPanel(): m_eng(NULL), m_x(0), m_y(0), m_w(272), m_h(0),
-                                  m_collapsed(false), m_autoCollapsed(false), m_memCollapsed(false), m_memWas(false), m_visible(true), m_sync(true), m_s(1.0), m_fullH(0),
+                                  m_collapsed(false), m_autoCollapsed(false), m_memCollapsed(false), m_memWas(false), m_fgSaved(false), m_visible(true), m_sync(true), m_s(1.0), m_fullH(0),
                                   m_status(""), m_statusClr(UTM_CLR_TEXT_DIM),
                                   m_chartW(0), m_chartH(0) {}
 
@@ -194,6 +196,8 @@ void CUtmPanel::Destroy()
    DestroyAll();
    if(ObjectFind(0, "UTM_P_SHOW") >= 0)
       ObjectDelete(0, "UTM_P_SHOW");
+   m_visible = false;
+   ApplyChartForeground();
   }
 
 void CUtmPanel::DestroyAll()
@@ -238,6 +242,33 @@ void CUtmPanel::Show(const bool on)
      {
       if(ObjectFind(0, "UTM_P_SHOW") >= 0)
          ObjectDelete(0, "UTM_P_SHOW");
+     }
+   ApplyChartForeground();
+  }
+
+//+------------------------------------------------------------------+
+//| refresh                                                           |
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| 展开时关掉「图表前景」，避免蜡烛盖住面板；折叠/隐藏时恢复原值     |
+//+------------------------------------------------------------------+
+void CUtmPanel::ApplyChartForeground()
+  {
+   bool expanded = (m_visible && g_set.panelVisible && !m_collapsed);
+
+   if(expanded)
+     {
+      //--- 展开期间保持关闭，避免蜡烛盖住面板；记住它本来是开着的
+      if((int)ChartGetInteger(0, CHART_FOREGROUND) != 0)
+        {
+         m_fgSaved = true;
+         ChartSetInteger(0, CHART_FOREGROUND, false);
+        }
+     }
+   else if(m_fgSaved)
+     {
+      ChartSetInteger(0, CHART_FOREGROUND, true);
+      m_fgSaved = false;
      }
   }
 
@@ -311,6 +342,7 @@ void CUtmPanel::Refresh()
       m_autoCollapsed = true;
       Build();
      }
+   ApplyChartForeground();
   }
 
 void CUtmPanel::Build()
@@ -388,10 +420,18 @@ void CUtmPanel::BuildHeader(int &y)
          UTM_CLR_TEXT_DIM, 8, false);
    y += 16;
 
-   //--- 快捷交易
-   Button("UTM_P_BTN_BUY", x0, y, 124, 22, "买入", UTM_CLR_BUY, C'255,255,255', 9, "市价买入");
-   Button("UTM_P_BTN_SELL", x0 + 132, y, 124, 22, "卖出", UTM_CLR_SELL, C'255,255,255', 9, "市价卖出");
-   y += 26;
+   //--- 快捷交易（默认隐藏，可在「设置」里打开）
+   if(g_set.showQuickTrade)
+     {
+      Button("UTM_P_BTN_BUY", x0, y, 124, 22, "买入", UTM_CLR_BUY, C'255,255,255', 9, "市价买入");
+      Button("UTM_P_BTN_SELL", x0 + 132, y, 124, 22, "卖出", UTM_CLR_SELL, C'255,255,255', 9, "市价卖出");
+      y += 26;
+     }
+   else
+     {
+      ObjectDelete(0, "UTM_P_BTN_BUY");
+      ObjectDelete(0, "UTM_P_BTN_SELL");
+     }
 
    bool ex = m_eng.ExecActive();
    Button("UTM_P_BTN_EXEC", x0, y, 60, 20, (ex ? "退出" : "执行"),
@@ -617,19 +657,23 @@ void CUtmPanel::BuildFooter(int &y)
           "读取共享的配置文件");
    y += 22;
 
-   Button("UTM_P_BTN_MEM", x0, y, 60, 18,
+   Button("UTM_P_BTN_MEM", x0, y, 52, 18,
           (g_set.memorySave ? "省内存" : "标准"),
           (g_set.memorySave ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
           "省内存：面板收起为折叠态，图表上也少画持仓文字和按钮");
-   Button("UTM_P_BTN_SND", x0 + 64, y, 60, 18,
+   Button("UTM_P_BTN_SND", x0 + 56, y, 48, 18,
           (g_set.sounds ? "声音开" : "声音关"),
           (g_set.sounds ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
           "成交 / 止损 / 止盈提示音");
-   Button("UTM_P_BTN_PRIV", x0 + 128, y, 60, 18,
+   Button("UTM_P_BTN_PRIV", x0 + 108, y, 48, 18,
           (g_set.privacyMode ? "隐私开" : "隐私关"),
           (g_set.privacyMode ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
-          "隐私模式：余额 / 净值 / 盈亏 / 风险金额显示为 ****");
-   Button("UTM_P_BTN_HIDE", x0 + 192, y, 64, 18, "隐藏 >>", UTM_CLR_BG_ALT, UTM_CLR_TEXT, 7,
+          "隐私模式：余额 / 净值 / 盈亏 / 手数显示为 ****");
+   Button("UTM_P_BTN_QUICK", x0 + 160, y, 48, 18,
+          (g_set.showQuickTrade ? "买卖开" : "买卖关"),
+          (g_set.showQuickTrade ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
+          "面板顶部的「买入 / 卖出」快捷按钮：默认隐藏");
+   Button("UTM_P_BTN_HIDE", x0 + 212, y, 44, 18, "隐藏", UTM_CLR_BG_ALT, UTM_CLR_TEXT, 7,
           "隐藏面板");
    y += 22;
 
@@ -703,6 +747,7 @@ void CUtmPanel::OnClick(const string name)
      }
    if(name == "UTM_P_BTN_MEM")          { g_set.memorySave = !g_set.memorySave;       m_sync = true; return; }
    if(name == "UTM_P_BTN_PRIV")         { g_set.privacyMode = !g_set.privacyMode;   m_sync = true; return; }
+   if(name == "UTM_P_BTN_QUICK")        { g_set.showQuickTrade = !g_set.showQuickTrade; m_sync = true; return; }
    if(name == "UTM_P_BTN_SND")          { g_set.sounds = !g_set.sounds;               m_sync = true; return; }
    if(name == "UTM_P_BTN_COMMRISK")     { g_set.commissionInRisk = !g_set.commissionInRisk; m_sync = true; return; }
    if(name == "UTM_P_BTN_COMMAUTO")

@@ -215,6 +215,7 @@ void UTM_SetDefaults(SUtmSettings &s)
    s.serverSplitTP   = true;
    s.defaultOrderMode = UTM_ORDER_MARKET;
    s.privacyMode      = false;
+   s.showQuickTrade   = false;
    s.panelX          = -1;
    s.panelY          = 24;
    s.panelVisible    = true;
@@ -318,6 +319,7 @@ bool UTM_SaveSettings(SUtmSettings &s)
    FileWrite(h, "serverSplitTP=" + IntegerToString(s.serverSplitTP ? 1 : 0));
    FileWrite(h, "defaultOrderMode=" + IntegerToString(s.defaultOrderMode));
    FileWrite(h, "privacyMode=" + IntegerToString(s.privacyMode ? 1 : 0));
+   FileWrite(h, "showQuickTrade=" + IntegerToString(s.showQuickTrade ? 1 : 0));
    FileWrite(h, "panelX=" + IntegerToString(s.panelX));
    FileWrite(h, "panelY=" + IntegerToString(s.panelY));
    FileWrite(h, "panelVisible=" + IntegerToString(s.panelVisible ? 1 : 0));
@@ -395,6 +397,7 @@ bool UTM_LoadSettings(SUtmSettings &s)
       else if(key == "serverSplitTP")    s.serverSplitTP = (StringToInteger(val) != 0);
       else if(key == "defaultOrderMode") s.defaultOrderMode = (int)StringToInteger(val);
       else if(key == "privacyMode")      s.privacyMode = (StringToInteger(val) != 0);
+      else if(key == "showQuickTrade")   s.showQuickTrade = (StringToInteger(val) != 0);
       else if(key == "panelX")         s.panelX = (int)StringToInteger(val);
       else if(key == "panelY")         s.panelY = (int)StringToInteger(val);
       else if(key == "panelVisible")   s.panelVisible = (StringToInteger(val) != 0);

@@ -6,7 +6,7 @@
 #define __UTM_DEFINES_MQH__
 
 #define UTM_NAME            "UTM Manager"
-#define UTM_VERSION         "1.23"
+#define UTM_VERSION         "1.25"
 #define UTM_BUILD           __DATE__
 #define UTM_MAX_TP          4
 #define UTM_MAX_SPLIT       10
@@ -187,7 +187,8 @@ struct SUtmSettings
    bool              commissionAuto;
    bool              serverSplitTP;
    int               defaultOrderMode;
-   bool              privacyMode;   // hide balance / equity / profit on screen
+   bool              privacyMode;      // hide balance / equity / profit on screen
+   bool              showQuickTrade;   // show the quick buy/sell buttons
    int               panelX;
    int               panelY;
    bool              panelVisible;

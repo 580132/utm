@@ -5,7 +5,7 @@
 （[UTM Manager Guide](https://www.mql5.com/en/blogs/post/751613) 及其子章节）所列功能独立实现。
 
 > 界面与提示信息全部为中文。本项目是**独立实现**，不包含、不反编译原商业产品的任何代码；UI 与参数命名按公开文档重建。
-> 当前版本：**1.23**。面板标题右侧显示 `v1.23`，鼠标悬停可看编译时间；EA 启动日志也会打印 `[UTM] 版本 1.23（编译 YYYY.MM.DD HH:MM）`。
+> 当前版本：**1.25**。面板标题右侧显示 `v1.25`，鼠标悬停可看编译时间；EA 启动日志也会打印 `[UTM] 版本 1.25（编译 YYYY.MM.DD HH:MM）`。
 
 > 与原作者、MQL5 官方无任何关联。
 
@@ -107,7 +107,7 @@ irm https://raw.githubusercontent.com/580132/utm/main/tools/update.ps1 -OutFile 
                    -MetaEditor   "C:\Program Files\MetaTrader 5\MetaEditor64.exe"
 
 # 安装指定版本，或只复制不编译
-.\tools\install.ps1 -Version v1.23
+.\tools\install.ps1 -Version v1.25
 .\tools\install.ps1 -NoCompile
 
 # 连同自测 EA 一起安装（不用于实盘）
@@ -135,7 +135,7 @@ irm https://raw.githubusercontent.com/580132/utm/main/tools/update.ps1 -OutFile 
    （否则会和本 EA 画的线重叠，拖错对象）；
 3. 图表属性中开启 **图表位移 / Chart Shift**，并把三角形拉到合适位置；
 4. 把 **UTM Manager** 拖到图表上；
-5. 面板出现在**左上角**（272×630），图表太矮时会自动折叠成标题栏，点 `+` 展开；图表文字会自动避开面板。
+5. 面板出现在**左上角**（272×604），图表太矮时会自动折叠成标题栏，点 `+` 展开；图表文字会自动避开面板。
 
 > 建议：一个图表只放一个实例。需要多个品种时，从“市场报价”把品种拖到当前图表切换，
 > 而不是开多个图表（与原版文档一致）。
@@ -143,10 +143,10 @@ irm https://raw.githubusercontent.com/580132/utm/main/tools/update.ps1 -OutFile 
 ### 面板分区（界面全中文）
 
 ```
-┌ UTM  交易管理器  v1.23      ┐  ← 折叠按钮
+┌ UTM  交易管理器  v1.25      ┐  ← 折叠按钮
 │ 余额 / 净值 / 货币           │
 │ 点差 / 均值 / 对冲|净额       │
-│ [ 买入 ]        [ 卖出 ]     │
+│ [买入/卖出]（默认隐藏）        │
 │ [执行/退出][保本][全平][撤挂] │
 │ 状态行 + 当日统计            │
 ├ 风险                        │
@@ -164,7 +164,7 @@ irm https://raw.githubusercontent.com/580132/utm/main/tools/update.ps1 -OutFile 
 │ 模式 | 因子 | 平滑            │
 ├ 设置                        │
 │ 设置 | 配置名 | 保存 | 读取 | 隐私  │
-│ 省内存 | 声音 | 隐私 | 隐藏   │
+│ 省内存 | 声音 | 隐私 | 买卖 | 隐藏 │
 │ 佣金/手 | 自动 / 手动          │
 └──────────────────────────────┘
 ```
@@ -183,6 +183,8 @@ irm https://raw.githubusercontent.com/580132/utm/main/tools/update.ps1 -OutFile 
 > 适合录屏 / 共享屏幕。开关状态随配置文件保存，重启后保持。
 > 图表上的持仓行会变成 `#3  ****  盈亏比 ****`，执行模式下的止损线标签也变成 `止损 20.0 点  手数 ****  风险 ****`；止损点数仍然可见（下单要用）。
 ---
+>
+> **图表前景**：面板展开时自动把 `图表前景`（CHART_FOREGROUND）关掉，避免蜡烛盖住面板和输入框；折叠或隐藏面板时恢复你原来的设置。
 
 ## 5. 下单与快捷键
 
@@ -393,6 +395,7 @@ irm https://raw.githubusercontent.com/580132/utm/main/tools/update.ps1 -OutFile 
 | `InpTPColor / InpTPStyle / InpTPWidth` | 止盈线颜色 / 线型 / 粗细 |
 | `InpHudBackground` | 左下角状态条是否绘制背景框（关闭后只有文字） |
 | `InpMemorySave` | 省内存：面板收起为**折叠态**（标题 / 余额 / 点差 / 买卖 / 执行按钮 / 状态行），图表上也少画持仓文字、50%/X 按钮和止盈价标签；点 `+` 仍可临时展开 |
+| `InpShowQuickTrade` | 面板是否显示「买入 / 卖出」快捷按钮（默认**不显示**，防误点） |
 | `InpCommissionAuto / InpCommissionPerLot / InpCommissionInRisk` | 自动检测佣金 / 手动每手佣金 / 佣金是否计入风险（影响手数） |
 | `InpServerSplitTP` | 多级止盈拆仓挂服务器（默认开）；关闭则由 EA 本地分批 |
 | `InpDefaultOrderMode` | 默认执行模式（市价 / 限价 / 突破），按 ESC 进入执行模式时使用 |
@@ -469,7 +472,7 @@ UITEST: objects=92 edits=26 buttons=24 problems=0
 2. **佣金**：默认自动读取「品种规格」里的佣金规则，读不到用成交记录推算；两者都没有按 0 计，不会偷偷用旧的手填值（手填值只在「手动」模式生效）。
 3. **自适应风险公式语言**：未实现，风险值只能手工设置 / 快捷键减半。
 4. **Trade Insights**：仅当日笔数、胜率、盈亏，无完整统计页。
-5. **图表面板**：固定在左上角（不可拖动），展开高度 630px，图表太矮时自动折叠。
+5. **图表面板**：固定在左上角（不可拖动），展开高度 604px，图表太矮时自动折叠。
 6. **回测**：非可视化回测下不绘图、不写状态文件（为性能）；功能逻辑仍会运行。
 7. **秒图**：若无法自动解析品种，请在参数 `InpTradeSymbol` 手工指定。
 8. **多实例**：同一品种不建议开多个实例（状态文件与 magic 会冲突）。

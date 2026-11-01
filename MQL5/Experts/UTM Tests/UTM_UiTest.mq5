@@ -103,6 +103,17 @@ void OnTick()
    string pins = ObjectGetString(0, "UTM_P_INS", OBJPROP_TEXT);
    Print("UITEST: privacy today=[", pins, "]");
    g_pnl.OnClick("UTM_P_BTN_PRIV");
+
+   //--- 展开时关闭图表前景，折叠时恢复
+   ChartSetInteger(0, CHART_FOREGROUND, true);
+   g_pnl.Refresh();
+   int fgExpanded = (int)ChartGetInteger(0, CHART_FOREGROUND);
+   g_pnl.OnClick("UTM_P_BTN_MIN");
+   g_pnl.Refresh();
+   int fgCollapsed = (int)ChartGetInteger(0, CHART_FOREGROUND);
+   Print("UITEST: foreground expanded=", fgExpanded, " collapsed=", fgCollapsed, " (expect 0 then 1)");
+   g_pnl.OnClick("UTM_P_BTN_MIN");
+   g_pnl.Refresh();
    int total = ObjectsTotal(0, -1, -1);
    int bad = 0, edits = 0, buttons = 0, labels = 0, rects = 0;
 
@@ -192,6 +203,15 @@ void OnTick()
    g_pnl.Refresh();
    Print("UITEST: full -> panelObjects=", CountPanelObjects());
 
+
+   g_set.showQuickTrade = true;
+   g_pnl.Refresh();
+   Print("UITEST: quick on -> buy=", (ObjectFind(0, "UTM_P_BTN_BUY") >= 0 ? 1 : 0),
+         " sell=", (ObjectFind(0, "UTM_P_BTN_SELL") >= 0 ? 1 : 0));
+   g_set.showQuickTrade = false;
+   g_pnl.Refresh();
+   Print("UITEST: quick off -> buy=", (ObjectFind(0, "UTM_P_BTN_BUY") >= 0 ? 1 : 0),
+         " (expect 0)");
    g_pnl.OnClick("UTM_P_BTN_RISKMODE");
    Print("UITEST: risk mode -> ", g_set.riskMode, " value=", DoubleToString(g_set.riskValue, 2));
 
