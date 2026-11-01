@@ -18,6 +18,14 @@ void UTM_InsightsLine(const int magic, string &txt, color &clr)
    static int      cachedWins = 0;
    static int      cachedDeals = 0;
    static double   cachedProfit = 0.0;
+   static bool     lastPriv = false;
+
+   //--- privacy toggled: rebuild immediately instead of waiting for the cache
+   if(lastPriv != g_set.privacyMode)
+     {
+      lastPriv = g_set.privacyMode;
+      lastCalc = 0;
+     }
 
    txt = cached;
    clr = UTM_CLR_TEXT_DIM;
@@ -68,9 +76,17 @@ void UTM_InsightsLine(const int magic, string &txt, color &clr)
    cachedProfit = profit;
 
    double wr = (deals > 0 ? (double)wins / (double)deals * 100.0 : 0.0);
+   if(g_set.privacyMode)
+     {
+      cached = "今日 ****";
+      clr    = UTM_CLR_TEXT_DIM;   // do not leak the sign through the colour
+      txt    = cached;
+      return;
+     }
+
    cached = "今日 " + IntegerToString(deals) + " 笔  " +
             DoubleToString(wr, 0) + "%  " +
-            (profit >= 0.0 ? "+" : "") + UTM_FmtMoney(profit);
+            UTM_Priv((profit >= 0.0 ? "+" : "") + UTM_FmtMoney(profit));
 
    if(cachedProfit > 0.0)      clr = UTM_CLR_BUY;
    else if(cachedProfit < 0.0) clr = UTM_CLR_SELL;

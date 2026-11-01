@@ -195,6 +195,7 @@ void OnTick()
         {
          g_set.riskMode    = UTM_RISK_PERCENT;
          g_set.riskValue   = 1.0;
+         g_set.commissionAuto = false;
          g_set.commissionPerLot = 7.0;
          g_set.commissionInRisk = false;
          g_t.ActivateExec(POSITION_TYPE_BUY);
@@ -224,6 +225,218 @@ void OnTick()
                " risk=", DoubleToString(g_t.ExecRisk(), 2),
                " cost=", DoubleToString(Risk_CostPerLot(_Symbol, MathAbs(g_t.ExecEntry() - g_t.ExecSL()), g_set), 2));
          g_steps++;
+         g_done = true;
+         return;
+        }
+     }
+
+   if(InpScenario == 8)
+     {
+      static int ast = 0;
+      if(ast == 0)
+        {
+         g_set.commissionAuto   = true;
+         g_set.commissionPerLot = 5.0;
+         UTM_CommissionScan(_Symbol, true);
+         Print("AUTOCOMM: spec=", DoubleToString(UTM_CommissionSpec(_Symbol, 1.0), 2),
+               " no-deals detected=", g_commDetected, " src=[", g_commSource, "]",
+               " eff=", DoubleToString(UTM_CommissionPerLot(g_set), 2),
+               " manual=", DoubleToString(g_set.commissionPerLot, 2));
+         ast++;
+         return;
+        }
+      if(ast == 1)
+        {
+         g_t.QuickTrade(POSITION_TYPE_BUY);
+         UTM_CommissionScan(_Symbol, true);
+         Print("AUTOCOMM: deals=", HistoryDealsTotal(),
+               " detected=", g_commDetected,
+               " inPerLot=", DoubleToString(g_commInPerLot, 2),
+               " outPerLot=", DoubleToString(g_commOutPerLot, 2),
+               " perLot=", DoubleToString(g_commPerLot, 2),
+               " effAuto=", DoubleToString(UTM_CommissionPerLot(g_set), 2));
+         ast++;
+         return;
+        }
+      if(ast == 2)
+        {
+         g_set.commissionAuto = false;
+         Print("AUTOCOMM: manual -> eff=", DoubleToString(UTM_CommissionPerLot(g_set), 2),
+               " (expect 5.00)");
+         ast++;
+         return;
+        }
+      if(ast == 3)
+        {
+         g_set.commissionAuto = true;
+         bool savedDetected = g_commDetected;
+         g_commDetected = false;
+         Print("AUTOCOMM: no-source -> eff=", DoubleToString(UTM_CommissionPerLot(g_set), 2),
+               " manual=", DoubleToString(g_set.commissionPerLot, 2), " (expect 0.00)");
+         g_commDetected = savedDetected;
+         ast++;
+         g_t.CloseAllPositions();
+         g_done = true;
+         return;
+        }
+     }
+
+   if(InpScenario == 11)
+     {
+      if(g_steps == 0)
+        {
+         g_set.defaultOrderMode = UTM_ORDER_STOP;
+         g_t.ActivateExec(POSITION_TYPE_BUY);
+         Print("DEFMODE: mode=", g_t.ExecMode(), " (expect 2=stop) active=", (g_t.ExecActive() ? 1 : 0),
+               " follow=", (g_t.ExecFollow() ? 1 : 0));
+         g_t.DeactivateExec();
+         g_steps++;
+         g_done = true;
+         return;
+        }
+     }
+
+   if(InpScenario == 13)
+     {
+      if(g_steps == 0)
+        {
+         g_set.riskMode  = UTM_RISK_LOT;
+         g_set.riskValue = 0.10;
+         g_set.tpCount   = 1;
+         g_set.tpPct[0]  = 100.0;
+         g_t.ToggleExec();                 // panel "执行"
+         Print("BTN: active=", (g_t.ExecActive() ? 1 : 0), " mode=", g_t.ExecMode());
+         g_steps++;
+         return;
+        }
+      if(g_steps == 1)
+        {
+         g_t.ExecConfirm();                // panel "发送"
+         g_steps++;
+         return;
+        }
+      if(g_steps == 2)
+        {
+         Print("BTN: after confirm count=", g_t.Count(), " active=", (g_t.ExecActive() ? 1 : 0),
+               " (expect count=1) err=[", g_t.LastError(), "]");
+         g_steps++;
+         g_done = true;
+         return;
+        }
+     }
+
+   if(InpScenario == 12)
+     {
+      static int st = 0;
+      if(st == 0)
+        {
+         g_set.riskMode  = UTM_RISK_LOT;
+         g_set.riskValue = 0.10;
+         g_set.tpCount   = 1;
+         g_set.tpPct[0]  = 100.0;
+         bool ok = g_t.QuickTrade(POSITION_TYPE_BUY);
+         Print("KEYTEST: open=", ok, " positions=", PositionsTotal(),
+               " execActive=", (g_t.ExecActive() ? 1 : 0));
+         st++;
+         return;
+        }
+      if(st == 1)
+        {
+         long lp = 88; double dpv = 0;
+         g_t.OnChartEvent(CHARTEVENT_KEYDOWN, lp, dpv, "");   // X outside exec mode
+         st++;
+         return;
+        }
+      if(st == 2)
+        {
+         Print("KEYTEST: X outside exec -> positions=", PositionsTotal(),
+               " execActive=", (g_t.ExecActive() ? 1 : 0), " (expect 1 position, i.e. blocked)");
+         long lp2 = 27; double dpv2 = 0;
+         g_t.OnChartEvent(CHARTEVENT_KEYDOWN, lp2, dpv2, "");  // ESC -> exec mode
+         long lp3 = 88; double dpv3 = 0;
+         g_t.OnChartEvent(CHARTEVENT_KEYDOWN, lp3, dpv3, "");  // X inside exec mode
+         st++;
+         return;
+        }
+      if(st == 3)
+        {
+         Print("KEYTEST: X inside exec -> positions=", PositionsTotal(),
+               " execActive=", (g_t.ExecActive() ? 1 : 0), " (expect 0)");
+         st++;
+         g_done = true;
+         return;
+        }
+     }
+
+   if(InpScenario == 10)
+     {
+      if(g_steps == 0)
+        {
+         g_set.riskMode  = UTM_RISK_LOT;
+         g_set.riskValue = 0.0;          // force a failed send (lot = 0)
+         g_t.ActivateExec(POSITION_TYPE_BUY);
+         double sl0 = g_t.ExecSL();
+         long lp = 400; double dpv = 300;
+         g_t.OnChartEvent(CHARTEVENT_CLICK, lp, dpv, "");
+         double sl1 = g_t.ExecSL();
+         long lp2 = 400; double dpv2 = 240;
+         g_t.OnChartEvent(CHARTEVENT_MOUSE_MOVE, lp2, dpv2, "");
+         double sl2 = g_t.ExecSL();
+         Print("FAILSTICK: active=", (g_t.ExecActive() ? 1 : 0),
+               " follow=", (g_t.ExecFollow() ? 1 : 0),
+               " slStart=", DoubleToString(sl0, _Digits),
+               " afterClick=", DoubleToString(sl1, _Digits),
+               " afterMove=", DoubleToString(sl2, _Digits),
+               " moved=", (MathAbs(sl2 - sl1) > 0.0 ? 1 : 0));
+         g_done = true;
+         return;
+        }
+     }
+
+
+   if(InpScenario == 9)
+     {
+      static int st = 0;
+      if(st == 0)
+        {
+         g_set.serverSplitTP = true;
+         g_set.riskMode  = UTM_RISK_LOT;
+         g_set.riskValue = InpLots;
+         g_set.tpCount   = 3;
+         g_set.tpRR[0] = 1.0; g_set.tpRR[1] = 2.0; g_set.tpRR[2] = 3.0;
+         g_set.tpPct[0] = 50.0; g_set.tpPct[1] = 30.0; g_set.tpPct[2] = 20.0;
+         bool ok = g_t.QuickTrade(POSITION_TYPE_BUY);
+         Print("SRVTP: quick=", ok);
+         st++;
+         return;
+        }
+      if(st == 1)
+        {
+         int n = 0;
+         string info = "";
+         for(int i = PositionsTotal() - 1; i >= 0; i--)
+           {
+            ulong tk = PositionGetTicket(i);
+            if(tk == 0)
+               continue;
+            if(PositionGetInteger(POSITION_MAGIC) != g_t.Magic())
+               continue;
+            if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+               continue;
+            n++;
+            info += " [" + DoubleToString(PositionGetDouble(POSITION_VOLUME), 2)
+                    + " tp=" + DoubleToString(PositionGetDouble(POSITION_TP), _Digits) + "]";
+           }
+         STrade tr;
+         string eng = "";
+         if(g_t.GetTradeInfo(0, tr))
+            eng = " serverTP=" + (tr.serverTP ? "1" : "0")
+                  + " tp=" + DoubleToString(tr.tp[0], _Digits)
+                  + "/" + DoubleToString(tr.tp[1], _Digits)
+                  + "/" + DoubleToString(tr.tp[2], _Digits);
+         Print("SRVTP: positions=", n, info, eng);
+         st++;
+         g_t.CloseAllPositions();
          g_done = true;
          return;
         }

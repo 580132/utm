@@ -14,6 +14,12 @@
 SUtmSettings g_set;
 SUtmStyle    g_style;
 
+//--- 隐私模式：把余额 / 净值 / 盈亏等金额换成星号
+string UTM_Priv(const string s)
+  {
+   return (g_set.privacyMode ? "****" : s);
+  }
+
 //+------------------------------------------------------------------+
 //| Line style defaults                                               |
 //+------------------------------------------------------------------+
@@ -205,6 +211,10 @@ void UTM_SetDefaults(SUtmSettings &s)
    s.tradeSymbol     = "";
    s.commissionPerLot = 0.0;
    s.commissionInRisk = false;
+   s.commissionAuto  = true;
+   s.serverSplitTP   = true;
+   s.defaultOrderMode = UTM_ORDER_MARKET;
+   s.privacyMode      = false;
    s.panelX          = -1;
    s.panelY          = 24;
    s.panelVisible    = true;
@@ -304,6 +314,10 @@ bool UTM_SaveSettings(SUtmSettings &s)
    FileWrite(h, "tradeSymbol=" + s.tradeSymbol);
    FileWrite(h, "commissionPerLot=" + DoubleToString(s.commissionPerLot, 3));
    FileWrite(h, "commissionInRisk=" + IntegerToString(s.commissionInRisk ? 1 : 0));
+   FileWrite(h, "commissionAuto=" + IntegerToString(s.commissionAuto ? 1 : 0));
+   FileWrite(h, "serverSplitTP=" + IntegerToString(s.serverSplitTP ? 1 : 0));
+   FileWrite(h, "defaultOrderMode=" + IntegerToString(s.defaultOrderMode));
+   FileWrite(h, "privacyMode=" + IntegerToString(s.privacyMode ? 1 : 0));
    FileWrite(h, "panelX=" + IntegerToString(s.panelX));
    FileWrite(h, "panelY=" + IntegerToString(s.panelY));
    FileWrite(h, "panelVisible=" + IntegerToString(s.panelVisible ? 1 : 0));
@@ -377,6 +391,10 @@ bool UTM_LoadSettings(SUtmSettings &s)
       else if(key == "tradeSymbol")    s.tradeSymbol = val;
       else if(key == "commissionPerLot") s.commissionPerLot = StringToDouble(val);
       else if(key == "commissionInRisk") s.commissionInRisk = (StringToInteger(val) != 0);
+      else if(key == "commissionAuto")   s.commissionAuto = (StringToInteger(val) != 0);
+      else if(key == "serverSplitTP")    s.serverSplitTP = (StringToInteger(val) != 0);
+      else if(key == "defaultOrderMode") s.defaultOrderMode = (int)StringToInteger(val);
+      else if(key == "privacyMode")      s.privacyMode = (StringToInteger(val) != 0);
       else if(key == "panelX")         s.panelX = (int)StringToInteger(val);
       else if(key == "panelY")         s.panelY = (int)StringToInteger(val);
       else if(key == "panelVisible")   s.panelVisible = (StringToInteger(val) != 0);
@@ -400,6 +418,12 @@ bool UTM_LoadSettings(SUtmSettings &s)
    if(s.tpCount > UTM_MAX_TP) s.tpCount = UTM_MAX_TP;
    if(s.riskMode < 0 || s.riskMode > 2) s.riskMode = UTM_RISK_PERCENT;
    if(s.spreadMode < 0 || s.spreadMode > 3) s.spreadMode = UTM_SPREAD_OFF;
+   if(s.slUnit != UTM_SL_PIPS && s.slUnit != UTM_SL_POINTS)
+     {
+      s.slUnit = UTM_SL_PIPS;   // ATR stop loss was removed
+      Print("[UTM] 止损单位已从 ATR 改为 pip");
+     }
+   s.trailingTP = false;        // trailing take profit was removed
    return true;
   }
 

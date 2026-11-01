@@ -1,4 +1,4 @@
-//+------------------------------------------------------------------+
+﻿//+------------------------------------------------------------------+
 //|                                             UTM_SettingsTest.mq5 |
 //|   Verifies settings save / load round-trip and the file location  |
 //+------------------------------------------------------------------+
@@ -16,7 +16,7 @@ int OnInit()
    g_set.profile          = prof;
    g_set.riskValue        = 3.75;
    g_set.slSize           = 42.5;
-   g_set.slUnit           = UTM_SL_ATR;
+   g_set.slUnit           = UTM_SL_POINTS;
    g_set.tpCount          = 3;
    g_set.tpRR[0]          = 1.5;
    g_set.tpPct[0]         = 40.0;
@@ -25,6 +25,7 @@ int OnInit()
    g_set.spreadMode       = UTM_SPREAD_IGNORE;
    g_set.commissionPerLot = 5.5;
    g_set.commissionInRisk = true;
+   g_set.commissionAuto   = false;
    g_set.formula          = "1.0:BE;1.5:TS 1.0";
    g_set.memorySave       = true;
 
@@ -50,6 +51,7 @@ int OnInit()
          " spread=", g_set.spreadMode,
          " comm=", DoubleToString(g_set.commissionPerLot, 2),
          " commInRisk=", (g_set.commissionInRisk ? 1 : 0),
+         " commAuto=", (g_set.commissionAuto ? 1 : 0),
          " formula=[", g_set.formula, "]",
          " mem=", (g_set.memorySave ? 1 : 0));
 

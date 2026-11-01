@@ -8,63 +8,15 @@
 #include "UTM_Defines.mqh"
 #include "UTM_Utils.mqh"
 
-//+------------------------------------------------------------------+
-//| ATR handle cache (per symbol + period)                            |
-//+------------------------------------------------------------------+
-class CUtmAtr
-  {
-private:
-   string            m_symbol;
-   int               m_period;
-   int               m_handle;
-
-public:
-                     CUtmAtr(): m_symbol(""), m_period(0), m_handle(INVALID_HANDLE) {}
-                    ~CUtmAtr() { Release(); }
-
-   void              Init(const string sym, const int period)
-     {
-      if(sym == m_symbol && period == m_period && m_handle != INVALID_HANDLE)
-         return;
-      Release();
-      m_symbol = sym;
-      m_period = period;
-      m_handle = iATR(sym, PERIOD_CURRENT, period);
-     }
-
-   void              Release()
-     {
-      if(m_handle != INVALID_HANDLE)
-        {
-         IndicatorRelease(m_handle);
-         m_handle = INVALID_HANDLE;
-        }
-     }
-
-   double            Value()
-     {
-      if(m_handle == INVALID_HANDLE)
-         return 0.0;
-      double buf[];
-      if(CopyBuffer(m_handle, 0, 0, 1, buf) != 1)
-         return 0.0;
-      return buf[0];
-     }
-  };
 
 //+------------------------------------------------------------------+
 //| Stop loss distance in price for the current settings              |
 //+------------------------------------------------------------------+
-double Risk_SLDistance(const string sym, SUtmSettings &s, const double atr)
+double Risk_SLDistance(const string sym, SUtmSettings &s)
   {
    double dist = 0.0;
 
-   if(s.slUnit == UTM_SL_ATR)
-     {
-      double a = (atr > 0.0 ? atr : UTM_PipsToPrice(sym, 20.0));
-      dist = a * s.slSize;
-     }
-   else if(s.slUnit == UTM_SL_PIPS)
+   if(s.slUnit == UTM_SL_PIPS)
       dist = s.slSize * UTM_PipSize(sym);
    else
       dist = s.slSize * UTM_Point(sym);
@@ -72,15 +24,13 @@ double Risk_SLDistance(const string sym, SUtmSettings &s, const double atr)
    //--- min / max are expressed in the same unit as the SL size
    if(s.slMin > 0.0)
      {
-      double mn = (s.slUnit == UTM_SL_ATR ? (atr * s.slMin)
-                  : (s.slUnit == UTM_SL_PIPS ? s.slMin * UTM_PipSize(sym) : s.slMin * UTM_Point(sym)));
+      double mn = (s.slUnit == UTM_SL_PIPS ? s.slMin * UTM_PipSize(sym) : s.slMin * UTM_Point(sym));
       if(dist < mn)
          dist = mn;
      }
    if(s.slMax > 0.0)
      {
-      double mx = (s.slUnit == UTM_SL_ATR ? (atr * s.slMax)
-                  : (s.slUnit == UTM_SL_PIPS ? s.slMax * UTM_PipSize(sym) : s.slMax * UTM_Point(sym)));
+      double mx = (s.slUnit == UTM_SL_PIPS ? s.slMax * UTM_PipSize(sym) : s.slMax * UTM_Point(sym));
       if(dist > mx)
          dist = mx;
      }
@@ -99,8 +49,9 @@ double Risk_SLDistance(const string sym, SUtmSettings &s, const double atr)
 double Risk_CostPerLot(const string sym, const double distance, SUtmSettings &s)
   {
    double cost = UTM_LossPerLot(sym, distance);
-   if(s.commissionInRisk && s.commissionPerLot > 0.0)
-      cost += s.commissionPerLot;
+   double comm = UTM_CommissionPerLot(s);
+   if(s.commissionInRisk && comm != 0.0)
+      cost += comm;
    return cost;
   }
 
@@ -175,8 +126,9 @@ double Risk_MoneyAtRisk(const string sym, const double lot, const double distanc
 double Risk_TotalAtRisk(const string sym, const double lot, const double distance, SUtmSettings &s)
   {
    double r = UTM_LossPerLot(sym, distance) * lot;
-   if(s.commissionInRisk && s.commissionPerLot > 0.0)
-      r += s.commissionPerLot * lot;
+   double comm = UTM_CommissionPerLot(s);
+   if(s.commissionInRisk && comm != 0.0)
+      r += comm * lot;
    return r;
   }
 

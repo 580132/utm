@@ -16,10 +16,14 @@ class CUtmPanel
 private:
    CUtmEngine       *m_eng;
    int               m_x, m_y, m_w, m_h;
+   int               m_fullH;   // expanded height in design units
    bool              m_collapsed;
    bool              m_autoCollapsed;
+   bool              m_memCollapsed;  // collapsed because of 省内存
+   bool              m_memWas;       // previous 省内存 state (edge detect)
    bool              m_visible;
    bool              m_sync;
+   double            m_s;      // effective panel scale (DPI, capped to the chart height)
    string            m_status;
    color             m_statusClr;
    int               m_chartW, m_chartH;
@@ -50,10 +54,12 @@ private:
    void              BuildSpread(int &y);
    void              BuildFooter(int &y);
    string            Fmt(const double v, const int d) { return DoubleToString(v, d); }
+   int               Px(const int v) const { return (int)MathRound((double)v * m_s); }
+   int               Fnt(const int v) const { return (int)MathMax(7, MathRound((double)v * m_s) + 1); }
 
 public:
                      CUtmPanel(): m_eng(NULL), m_x(0), m_y(0), m_w(272), m_h(0),
-                                  m_collapsed(false), m_autoCollapsed(false), m_visible(true), m_sync(true),
+                                  m_collapsed(false), m_autoCollapsed(false), m_memCollapsed(false), m_memWas(false), m_visible(true), m_sync(true), m_s(1.0), m_fullH(0),
                                   m_status(""), m_statusClr(UTM_CLR_TEXT_DIM),
                                   m_chartW(0), m_chartH(0) {}
 
@@ -68,7 +74,11 @@ public:
    int               Y()      const { return m_y; }
    bool              HitTest(const int x, const int y) const
      {
-      return (m_visible && x >= m_x && x <= m_x + m_w && y >= m_y && y <= m_y + m_h);
+      if(!m_visible)
+         return false;
+      int rx = Px(m_x);
+      int ry = Px(m_y);
+      return (x >= rx && x <= rx + Px(m_w) && y >= ry && y <= ry + Px(m_h));
      }
    bool              IsPanelObject(const string name) const { return (StringFind(name, UTM_OBJ_PREFIX + "P_") == 0); }
    void              OnClick(const string name);
@@ -90,13 +100,13 @@ void CUtmPanel::Rect(const string name, const int x, const int y, const int w, c
       ObjectSetInteger(0, name, OBJPROP_BACK, false);
       ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
      }
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
-   ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, Px(x));
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, Px(y));
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, Px(w));
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, Px(h));
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
    ObjectSetInteger(0, name, OBJPROP_COLOR, border);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, MathMax(1, Px(1)));
   }
 
 void CUtmPanel::Label(const string name, const int x, const int y, const string text,
@@ -111,11 +121,11 @@ void CUtmPanel::Label(const string name, const int x, const int y, const string 
       ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
       ObjectSetInteger(0, name, OBJPROP_BACK, false);
      }
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, Px(x));
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, Px(y));
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    ObjectSetString(0, name, OBJPROP_FONT, bold ? "Microsoft YaHei" : "Microsoft YaHei");
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, Fnt(size));
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
   }
 
@@ -134,12 +144,12 @@ void CUtmPanel::Edit(const string name, const int x, const int y, const int w, c
       ObjectSetInteger(0, name, OBJPROP_BGCOLOR, UTM_CLR_BG_ALT);
       ObjectSetInteger(0, name, OBJPROP_COLOR, UTM_CLR_TEXT);
       ObjectSetString(0, name, OBJPROP_FONT, "Microsoft YaHei");
-      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 8);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, Fnt(8));
      }
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
-   ObjectSetInteger(0, name, OBJPROP_YSIZE, 18);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, Px(x));
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, Px(y));
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, Px(w));
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, Px(18));
    if(tip != "")
       ObjectSetString(0, name, OBJPROP_TOOLTIP, tip);
    if(isNew || m_sync)
@@ -158,14 +168,14 @@ void CUtmPanel::Button(const string name, const int x, const int y, const int w,
       ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, UTM_CLR_BORDER);
       ObjectSetString(0, name, OBJPROP_FONT, "Microsoft YaHei");
      }
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
-   ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, Px(x));
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, Px(y));
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, Px(w));
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, Px(h));
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, Fnt(size));
    if(tip != "")
       ObjectSetString(0, name, OBJPROP_TOOLTIP, tip);
   }
@@ -244,6 +254,21 @@ void CUtmPanel::Refresh()
    m_chartW = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
    m_chartH = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
 
+   //--- effective scale: requested DPI scale, but never taller than the chart
+   m_s = g_uiScale;
+   if(m_s > 1.0)
+     {
+      double avail = (double)m_chartH - 40.0 * m_s;
+      double need  = (m_fullH > 0 ? (double)m_fullH : 610.0) * m_s;
+      if(need > avail && avail > 0.0)
+        {
+         double fit = avail / (m_fullH > 0 ? (double)m_fullH : 610.0);
+         if(fit < 1.0)
+            fit = 1.0;
+         m_s = fit;
+        }
+     }
+
    if(!g_set.panelVisible)
      {
       Show(false);
@@ -257,8 +282,30 @@ void CUtmPanel::Refresh()
    Build();
    m_sync = false;
 
+   //--- 省内存：打开时面板只保留折叠态的内容（之后仍可点 + 展开）
+   if(g_set.memorySave && !m_memWas)
+     {
+      m_memWas       = true;
+      m_memCollapsed = true;
+      m_collapsed    = true;
+      m_autoCollapsed = true;
+      Build();
+     }
+   else if(!g_set.memorySave && m_memWas)
+     {
+      m_memWas = false;
+      if(m_memCollapsed)
+        {
+         m_memCollapsed  = false;
+         m_collapsed     = false;
+         m_autoCollapsed = false;
+         Build();
+        }
+     }
+
+
    //--- keep the panel usable on very short charts
-   if(!g_utmForceUI && !m_collapsed && !m_autoCollapsed && m_chartH > 200 && m_h > m_chartH - 8)
+   if(!g_utmForceUI && !m_collapsed && !m_autoCollapsed && m_chartH > Px(200) && Px(m_h) > m_chartH - 8)
      {
       m_collapsed = true;
       m_autoCollapsed = true;
@@ -293,7 +340,7 @@ void CUtmPanel::Build()
       m_h = (y - m_y) + 8;
       Rect("UTM_P_BG", m_x, m_y, m_w, m_h, UTM_CLR_BG, UTM_CLR_BORDER);
       Rect("UTM_P_TITLEBG", m_x, m_y, m_w, 26, UTM_CLR_HEADER, UTM_CLR_BORDER);
-      m_eng.SetPanelRect(m_x, m_y, m_w, m_h, true);
+   m_eng.SetPanelRect(Px(m_x), Px(m_y), Px(m_w), Px(m_h), true);
       return;
      }
 
@@ -305,9 +352,10 @@ void CUtmPanel::Build()
    BuildFooter(y);
 
    m_h = (y - m_y) + 8;
+   m_fullH = m_h;
    Rect("UTM_P_BG", m_x, m_y, m_w, m_h, UTM_CLR_BG, UTM_CLR_BORDER);
    Rect("UTM_P_TITLEBG", m_x, m_y, m_w, 26, UTM_CLR_HEADER, UTM_CLR_BORDER);
-   m_eng.SetPanelRect(m_x, m_y, m_w, m_h, true);
+   m_eng.SetPanelRect(Px(m_x), Px(m_y), Px(m_w), Px(m_h), true);
   }
 
 //+------------------------------------------------------------------+
@@ -319,6 +367,7 @@ void CUtmPanel::BuildHeader(int &y)
 
    Label("UTM_P_TITLE", x0, m_y + 5, "UTM  交易管理器", UTM_CLR_TEXT, 10, true);
    Label("UTM_P_VER", x0 + 118, m_y + 8, "v" + UTM_VERSION, UTM_CLR_TEXT_DIM, 7, false);
+   ObjectSetString(0, "UTM_P_VER", OBJPROP_TOOLTIP, "编译 " + UTM_BuildStamp());
 
    Button("UTM_P_BTN_MIN", m_x + m_w - 26, m_y + 5, 18, 16, (m_collapsed ? "+" : "-"),
           UTM_CLR_HEADER, UTM_CLR_TEXT, 9, "折叠 / 展开");
@@ -328,18 +377,15 @@ void CUtmPanel::BuildHeader(int &y)
    double bal = UTM_BalanceForRisk(g_set.overrideBalance);
    double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
    Label("UTM_P_INFO1", x0, y,
-         "余额 " + UTM_FmtMoney(bal) + "   净值 " + UTM_FmtMoney(eq) + "   " + AccountInfoString(ACCOUNT_CURRENCY),
+         "余额 " + UTM_Priv(UTM_FmtMoney(bal)) + "   净值 " + UTM_Priv(UTM_FmtMoney(eq)) + "   " + AccountInfoString(ACCOUNT_CURRENCY),
          UTM_CLR_TEXT_DIM, 8, false);
    y += 14;
 
-   if(!g_set.memorySave)
    Label("UTM_P_INFO2", x0, y,
          "点差 " + DoubleToString(UTM_PriceToPips(m_eng.Symbol(), m_eng.RawSpread()), 1) +
          "   均值 " + DoubleToString(UTM_PriceToPips(m_eng.Symbol(), m_eng.EmaSpread()), 1) +
          "   " + (UTM_IsHedging() ? "对冲" : "净额"),
          UTM_CLR_TEXT_DIM, 8, false);
-   else
-      ObjectDelete(0, "UTM_P_INFO2");
    y += 16;
 
    //--- 快捷交易
@@ -348,12 +394,12 @@ void CUtmPanel::BuildHeader(int &y)
    y += 26;
 
    bool ex = m_eng.ExecActive();
-   Button("UTM_P_BTN_EXEC", x0, y, 60, 20, (ex ? "发送" : "执行"),
+   Button("UTM_P_BTN_EXEC", x0, y, 60, 20, (ex ? "退出" : "执行"),
           (ex ? UTM_CLR_ACCENT : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 8,
-          (ex ? "与图表左键相同：确认当前步骤 / 发送" : "执行模式（ESC）"));
+          (ex ? "退出执行模式（ESC）" : "进入执行模式后，在图表上左键下单（或按 Enter）"));
    Button("UTM_P_BTN_BE", x0 + 64, y, 60, 20, "保本", UTM_CLR_BG_ALT, UTM_CLR_TEXT, 8, "全部保本（E）");
    Button("UTM_P_BTN_CLOSE", x0 + 128, y, 60, 20, "全平", UTM_CLR_BG_ALT, UTM_CLR_TEXT, 8, "平掉全部仓位（X）");
-   Button("UTM_P_BTN_CANCEL", x0 + 192, y, 64, 20, "撤挂", UTM_CLR_BG_ALT, UTM_CLR_TEXT, 8, "撤销全部挂单（C）");
+   Button("UTM_P_BTN_CANCEL", x0 + 192, y, 64, 20, "撤挂", UTM_CLR_BG_ALT, UTM_CLR_TEXT, 8, "取消全部挂单（C）");
    y += 24;
 
    string st = m_eng.LastError();
@@ -378,7 +424,7 @@ void CUtmPanel::BuildHeader(int &y)
    string ins = "";
    color  iclr = UTM_CLR_TEXT_DIM;
    UTM_InsightsLine(m_eng.Magic(), ins, iclr);
-   if(ins != "" && !g_set.memorySave)
+   if(ins != "")
       Label("UTM_P_INS", x0, y, ins, iclr, 7, false);
    else
       ObjectDelete(0, "UTM_P_INS");
@@ -432,22 +478,20 @@ void CUtmPanel::BuildStopLoss(int &y)
    Edit("UTM_P_E_SLSIZE", x0 + 72, y, 46, Fmt(g_set.slSize, 1), "止损大小");
 
    string unitTxt = "pip";
-   if(g_set.slUnit == UTM_SL_POINTS) unitTxt = "点";
-   else if(g_set.slUnit == UTM_SL_ATR) unitTxt = "ATR倍";
+   if(g_set.slUnit == UTM_SL_POINTS)
+      unitTxt = "点";
    Button("UTM_P_BTN_UNIT", x0 + 122, y, 60, 18, unitTxt, UTM_CLR_BG_ALT, UTM_CLR_TEXT, 7,
-          "止损单位：点 / pip / ATR 倍数");
+          "止损单位：pip / 点（点一下切换）");
    Button("UTM_P_BTN_LOCKRR", x0 + 186, y, 70, 18,
-          (g_set.lockRR ? "锁定盈亏比" : "自由盈亏比"),
+          (g_set.lockRR ? "锁定盈亏比" : "不锁盈亏比"),
           (g_set.lockRR ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
-          "拖动挂单入场线时保持盈亏比不变");
+          "拖动挂单入场线时锁定盈亏比不变");
    y += 21;
 
    Label("UTM_P_L_SLMIN", x0, y + 3, "最小", UTM_CLR_TEXT_DIM, 7, false);
    Edit("UTM_P_E_SLMIN", x0 + 28, y, 38, Fmt(g_set.slMin, 1), "最小止损");
    Label("UTM_P_L_SLMAX", x0 + 70, y + 3, "最大", UTM_CLR_TEXT_DIM, 7, false);
    Edit("UTM_P_E_SLMAX", x0 + 98, y, 38, Fmt(g_set.slMax, 1), "最大止损");
-   Label("UTM_P_L_ATR", x0 + 140, y + 3, "ATR", UTM_CLR_TEXT_DIM, 7, false);
-   Edit("UTM_P_E_ATR", x0 + 166, y, 36, IntegerToString(g_set.atrPeriod), "ATR 周期");
    y += 24;
   }
 
@@ -482,14 +526,7 @@ void CUtmPanel::BuildTakeProfit(int &y)
       y += 20;
      }
 
-   Button("UTM_P_BTN_TRAIL", x0, y, 72, 18,
-          (g_set.trailingTP ? "移动止盈" : "移动止盈关"),
-          (g_set.trailingTP ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
-          "移动止盈线");
-   Edit("UTM_P_E_TRAILRR", x0 + 76, y, 44, Fmt(g_set.trailTPRR, 2), "每步前进的 R 倍数");
-   Edit("UTM_P_E_TRAILPCT", x0 + 124, y, 44, Fmt(g_set.trailTPPct, 0), "每步平仓百分比");
-   Label("UTM_P_L_TRAILH", x0 + 174, y + 3, "R / %", UTM_CLR_TEXT_DIM, 7, false);
-   y += 24;
+   y += 2;
   }
 
 //+------------------------------------------------------------------+
@@ -511,6 +548,21 @@ void CUtmPanel::BuildManagement(int &y)
           (g_set.failsafeSL ? "兜底止损：开" : "兜底止损：关"),
           (g_set.failsafeSL ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
           "虚拟止损时额外在 2R 处挂经纪商止损");
+   y += 21;
+
+   Button("UTM_P_BTN_SRVTP", x0, y, 128, 18,
+          (g_set.serverSplitTP ? "服务器TP：拆仓" : "服务器TP：关"),
+          (g_set.serverSplitTP ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
+          "开：市价单的多级止盈拆成多个仓位，各自止盈挂在服务器，MT5 关闭也能止盈；挂单或手数太小则整仓挂末级止盈");
+   Label("UTM_P_L_SRVTP", x0 + 132, y + 3, "拆不了挂末级", UTM_CLR_TEXT_DIM, 7, false);
+   y += 21;
+
+   Button("UTM_P_BTN_DEFMODE", x0, y, 128, 18,
+          "默认模式：" + (g_set.defaultOrderMode == UTM_ORDER_LIMIT ? "限价" :
+                          (g_set.defaultOrderMode == UTM_ORDER_STOP ? "突破" : "市价")),
+          (g_set.defaultOrderMode == UTM_ORDER_MARKET ? UTM_CLR_BG_ALT : UTM_CLR_ACCENT_DARK), UTM_CLR_TEXT, 7,
+          "按 ESC / 点执行进入执行模式时使用的订单类型；点一下切换 市价 → 限价 → 突破");
+   Label("UTM_P_L_DEFMODE", x0 + 132, y + 3, "进入执行时用", UTM_CLR_TEXT_DIM, 7, false);
    y += 21;
 
    Edit("UTM_P_E_FORMULA", x0, y, 256, g_set.formula,
@@ -565,25 +617,41 @@ void CUtmPanel::BuildFooter(int &y)
           "读取共享的配置文件");
    y += 22;
 
-   Button("UTM_P_BTN_MEM", x0, y, 78, 18,
-          (g_set.memorySave ? "省内存" : "完整界面"),
+   Button("UTM_P_BTN_MEM", x0, y, 60, 18,
+          (g_set.memorySave ? "省内存" : "标准"),
           (g_set.memorySave ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
-          "省内存模式（少画一些图表文字）");
-   Button("UTM_P_BTN_SND", x0 + 82, y, 78, 18,
-          (g_set.sounds ? "声音：开" : "声音：关"),
+          "省内存：面板收起为折叠态，图表上也少画持仓文字和按钮");
+   Button("UTM_P_BTN_SND", x0 + 64, y, 60, 18,
+          (g_set.sounds ? "声音开" : "声音关"),
           (g_set.sounds ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
           "成交 / 止损 / 止盈提示音");
-   Button("UTM_P_BTN_HIDE", x0 + 164, y, 92, 18, "隐藏 >>", UTM_CLR_BG_ALT, UTM_CLR_TEXT, 7,
+   Button("UTM_P_BTN_PRIV", x0 + 128, y, 60, 18,
+          (g_set.privacyMode ? "隐私开" : "隐私关"),
+          (g_set.privacyMode ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
+          "隐私模式：余额 / 净值 / 盈亏 / 风险金额显示为 ****");
+   Button("UTM_P_BTN_HIDE", x0 + 192, y, 64, 18, "隐藏 >>", UTM_CLR_BG_ALT, UTM_CLR_TEXT, 7,
           "隐藏面板");
    y += 22;
 
    Label("UTM_P_L_COMM", x0, y + 3, "佣金/手", UTM_CLR_TEXT_DIM, 7, false);
-   Edit("UTM_P_E_COMM", x0 + 46, y, 50, Fmt(g_set.commissionPerLot, 2),
-        "每手往返佣金（账户货币）");
-   Button("UTM_P_BTN_COMMRISK", x0 + 100, y, 156, 18,
-          (g_set.commissionInRisk ? "佣金计入风险：开" : "佣金计入风险：关"),
+   Edit("UTM_P_E_COMM", x0 + 40, y, 46, Fmt(UTM_CommissionPerLot(g_set), 2),
+        (g_set.commissionAuto
+         ? (g_commDetected
+            ? "自动（" + g_commSource + "）：每手往返 " + Fmt(g_commPerLot, 2) + " " + AccountInfoString(ACCOUNT_CURRENCY)
+            : "品种规格和成交里都没有佣金，按 0 计")
+         : "每手往返佣金（账户货币）"));
+   ObjectSetInteger(0, "UTM_P_E_COMM", OBJPROP_READONLY, g_set.commissionAuto);
+   ObjectSetInteger(0, "UTM_P_E_COMM", OBJPROP_BGCOLOR,
+                    g_set.commissionAuto ? UTM_CLR_BG : UTM_CLR_BG_ALT);
+   ObjectSetString(0, "UTM_P_E_COMM", OBJPROP_TEXT, Fmt(UTM_CommissionPerLot(g_set), 2));
+   Button("UTM_P_BTN_COMMAUTO", x0 + 90, y, 42, 18,
+          (g_set.commissionAuto ? "自动" : "手动"),
+          (g_set.commissionAuto ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
+          "自动从历史成交读取佣金；点一下改为手动填写");
+   Button("UTM_P_BTN_COMMRISK", x0 + 136, y, 120, 18,
+          (g_set.commissionInRisk ? "计入风险：开" : "计入风险：关"),
           (g_set.commissionInRisk ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
-          "开启后手数计算会把佣金一起算进风险");
+          "打开后把佣金一起算进风险金额和手数");
    y += 22;
 
    Label("UTM_P_L_FOOT", x0, y, "ESC 执行 | 退格 切模式 | 左键 下单", UTM_CLR_TEXT_DIM, 7, false);
@@ -603,19 +671,10 @@ void CUtmPanel::OnClick(const string name)
 
    if(name == "UTM_P_BTN_BUY")          { m_eng.QuickTrade(POSITION_TYPE_BUY);  m_sync = true; return; }
    if(name == "UTM_P_BTN_SELL")         { m_eng.QuickTrade(POSITION_TYPE_SELL); m_sync = true; return; }
-   if(name == "UTM_P_BTN_EXEC")
-     {
-      if(m_eng.ExecActive())
-         m_eng.ExecConfirm();
-      else
-         m_eng.ToggleExec();
-      m_sync = true;
-      return;
-     }
+   if(name == "UTM_P_BTN_EXEC")         { m_eng.ToggleExec(); m_sync = true; return; }
    if(name == "UTM_P_BTN_BE")           { m_eng.BreakEvenAll();      m_sync = true; return; }
    if(name == "UTM_P_BTN_CLOSE")        { m_eng.CloseAllPositions(); m_sync = true; return; }
    if(name == "UTM_P_BTN_CANCEL")       { m_eng.CancelPending();     m_sync = true; return; }
-
    if(name == "UTM_P_BTN_RISKMODE")
      {
       g_set.riskMode++;
@@ -631,20 +690,36 @@ void CUtmPanel::OnClick(const string name)
    if(name == "UTM_P_BTN_SPLIT")        { g_set.bypassMaxLot = !g_set.bypassMaxLot;   m_sync = true; return; }
    if(name == "UTM_P_BTN_FIXED")        { g_set.fixedSL = !g_set.fixedSL;             m_sync = true; return; }
    if(name == "UTM_P_BTN_LOCKRR")       { g_set.lockRR = !g_set.lockRR;               m_sync = true; return; }
-   if(name == "UTM_P_BTN_TRAIL")        { g_set.trailingTP = !g_set.trailingTP;       m_sync = true; return; }
    if(name == "UTM_P_BTN_DROPPEND")     { g_set.removePendingOnSL = !g_set.removePendingOnSL; m_sync = true; return; }
    if(name == "UTM_P_BTN_FAILSAFE")     { g_set.failsafeSL = !g_set.failsafeSL;       m_sync = true; return; }
+   if(name == "UTM_P_BTN_SRVTP")         { g_set.serverSplitTP = !g_set.serverSplitTP;   m_sync = true; return; }
+   if(name == "UTM_P_BTN_DEFMODE")
+     {
+      if(g_set.defaultOrderMode == UTM_ORDER_MARKET)      g_set.defaultOrderMode = UTM_ORDER_LIMIT;
+      else if(g_set.defaultOrderMode == UTM_ORDER_LIMIT)  g_set.defaultOrderMode = UTM_ORDER_STOP;
+      else                                                g_set.defaultOrderMode = UTM_ORDER_MARKET;
+      m_sync = true;
+      return;
+     }
    if(name == "UTM_P_BTN_MEM")          { g_set.memorySave = !g_set.memorySave;       m_sync = true; return; }
+   if(name == "UTM_P_BTN_PRIV")         { g_set.privacyMode = !g_set.privacyMode;   m_sync = true; return; }
    if(name == "UTM_P_BTN_SND")          { g_set.sounds = !g_set.sounds;               m_sync = true; return; }
    if(name == "UTM_P_BTN_COMMRISK")     { g_set.commissionInRisk = !g_set.commissionInRisk; m_sync = true; return; }
+   if(name == "UTM_P_BTN_COMMAUTO")
+     {
+      g_set.commissionAuto = !g_set.commissionAuto;
+      if(g_set.commissionAuto)
+         UTM_CommissionScan(m_eng.Symbol(), true);
+      else if(g_set.commissionPerLot <= 0.0 && g_commDetected)
+         g_set.commissionPerLot = g_commPerLot;   // start manual editing from the detected value
+      m_sync = true;
+      return;
+     }
 
    if(name == "UTM_P_BTN_UNIT")
      {
       g_set.slUnit++;
-      if(g_set.slUnit > 2)
-         g_set.slUnit = 0;
-      if(g_set.slUnit == UTM_SL_ATR && g_set.slSize > 10.0)
-         g_set.slSize = 1.5;
+      g_set.slUnit = (g_set.slUnit == UTM_SL_PIPS ? UTM_SL_POINTS : UTM_SL_PIPS);
       m_sync = true;
       return;
      }
@@ -709,11 +784,8 @@ void CUtmPanel::OnEndEdit(const string name)
    else if(field == "SLSIZE")     g_set.slSize = MathMax(0.0, v);
    else if(field == "SLMIN")      g_set.slMin = MathMax(0.0, v);
    else if(field == "SLMAX")      g_set.slMax = MathMax(0.0, v);
-   else if(field == "ATR")        g_set.atrPeriod = (int)MathMax(2.0, v);
-   else if(field == "TRAILRR")    g_set.trailTPRR = MathMax(0.01, v);
-   else if(field == "TRAILPCT")   g_set.trailTPPct = MathMin(100.0, MathMax(0.0, v));
    else if(field == "BE")         g_set.beOffsetRR = v;
-   else if(field == "COMM")        g_set.commissionPerLot = MathMax(0.0, v);
+   else if(field == "COMM" && !g_set.commissionAuto) g_set.commissionPerLot = MathMax(0.0, v);
    else if(field == "FORMULA")    g_set.formula = raw;
    else if(field == "SPREADF")    g_set.spreadFactor = MathMax(0.0, v);
    else if(field == "EMA")

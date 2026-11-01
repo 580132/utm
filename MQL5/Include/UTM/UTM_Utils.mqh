@@ -8,6 +8,225 @@
 #include "UTM_Defines.mqh"
 
 //--- -----------------------------------------------------------------
+//--- UI scale (macOS / HiDPI: the whole panel is drawn 2x too small)
+//--- -----------------------------------------------------------------
+double g_uiScale = 1.0;
+
+int UTM_UI(const int v)
+  {
+   return (int)MathRound((double)v * g_uiScale);
+  }
+
+//--- build stamp of this compilation (compile date + time)
+string UTM_BuildStamp()
+  {
+   return TimeToString(__DATETIME__, TIME_DATE | TIME_MINUTES);
+  }
+
+int UTM_UIFont(const int v)
+  {
+   int s = (int)MathRound((double)v * g_uiScale);
+   if(s < 6)
+      s = 6;
+   return s;
+  }
+
+//--- -----------------------------------------------------------------
+//--- commission: from the symbol specification, else from real deals
+//--- -----------------------------------------------------------------
+double   g_commPerLot    = 0.0;   // entry + exit, per lot
+double   g_commInPerLot  = 0.0;
+double   g_commOutPerLot = 0.0;
+bool     g_commDetected  = false; // at least one source was usable
+string   g_commSource    = "";    // "品种规格" / "成交记录"
+datetime g_commStamp     = 0;
+
+//--- commission actually used for risk / P&L display
+double UTM_CommissionPerLot(const SUtmSettings &s)
+  {
+   //--- auto: spec / deals only, otherwise 0 (never the manual value)
+   if(s.commissionAuto)
+      return (g_commDetected ? g_commPerLot : 0.0);
+   return s.commissionPerLot;
+  }
+
+//--- commission from the symbol specification (returns -1 when unknown)
+double UTM_CommissionSpec(const string sym, const double lot)
+  {
+   MqlCommission rules[];
+   int n = SymbolInfoCommissions(sym, rules);
+   if(n <= 0)
+      return -1.0;
+
+   string acct = AccountInfoString(ACCOUNT_CURRENCY);
+   double price = SymbolInfoDouble(sym, SYMBOL_ASK);
+   if(price <= 0.0)
+      price = SymbolInfoDouble(sym, SYMBOL_BID);
+   double contract = SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE);
+
+   double total = 0.0;
+   bool   any   = false;
+
+   for(int i = 0; i < n; i++)
+     {
+      //--- profit-dependent rules cannot be priced in advance
+      if((int)rules[i].mode_profit != (int)SYMBOL_COMMISSION_PROFIT_ALL)
+         continue;
+
+      int nt = ArraySize(rules[i].tiers);
+      if(nt <= 0)
+         continue;
+
+      //--- the tier that covers our volume
+      int pick = 0;
+      for(int k = 0; k < nt; k++)
+        {
+         double from = rules[i].tiers[k].range_from;
+         double to   = rules[i].tiers[k].range_to;
+         if(lot >= from && (to <= 0.0 || lot <= to))
+           {
+            pick = k;
+            break;
+           }
+        }
+
+      int mode = (int)rules[i].tiers[pick].mode;
+      if(mode == (int)SYMBOL_COMMISSION_DISABLED)
+         continue;
+
+      string cur = rules[i].tiers[pick].currency;
+      if(cur == "")
+         cur = rules[i].currency;
+      if(cur != "" && cur != acct)
+         return -1.0;   // currency conversion not supported -> use deals instead
+
+      double perUnit = 0.0;
+      if(mode == (int)SYMBOL_COMMISSION_MONEY_DEPOSIT ||
+         mode == (int)SYMBOL_COMMISSION_MONEY_SPECIFIED ||
+         mode == (int)SYMBOL_COMMISSION_MONEY_SYMBOL_BASE ||
+         mode == (int)SYMBOL_COMMISSION_MONEY_SYMBOL_PROFIT ||
+         mode == (int)SYMBOL_COMMISSION_MONEY_SYMBOL_MARGIN)
+         perUnit = rules[i].tiers[pick].value;
+      else if(mode == (int)SYMBOL_COMMISSION_PIPS)
+         perUnit = UTM_LossPerLot(sym, rules[i].tiers[pick].value * UTM_Point(sym));
+      else if(mode == (int)SYMBOL_COMMISSION_PERCENT)
+         perUnit = rules[i].tiers[pick].value / 100.0 * contract * (price > 0.0 ? price : 1.0);
+      else
+         continue;   // percent of profit: unknown before the trade
+
+      if(rules[i].tiers[pick].max_value > 0.0 && perUnit > rules[i].tiers[pick].max_value)
+         perUnit = rules[i].tiers[pick].max_value;
+      if(rules[i].tiers[pick].min_value > 0.0 && perUnit < rules[i].tiers[pick].min_value)
+         perUnit = rules[i].tiers[pick].min_value;
+
+      int vtype = (int)rules[i].tiers[pick].volume_type;
+      if(vtype == (int)SYMBOL_COMMISSION_VOLUME_TYPE_TRADE)
+         perUnit = (lot > 0.0 ? perUnit / lot : perUnit);   // per deal -> per lot
+      else if(vtype == (int)SYMBOL_COMMISSION_VOLUME_TYPE_TURNOVER)
+         continue;   // turnover based: needs the deal value
+
+      //--- charged on both sides -> the round trip costs twice as much
+      if((int)rules[i].mode_entry == (int)SYMBOL_COMMISSION_ENTRY_INOUT)
+         perUnit *= 2.0;
+
+      total += perUnit;
+      any = true;
+     }
+
+   return (any ? total : -1.0);
+  }
+
+//--- work out the commission per lot: spec first, deals as a fallback
+void UTM_CommissionScan(const string sym, const bool force = false)
+  {
+   if(!force && TimeCurrent() - g_commStamp < 300)
+      return;
+   g_commStamp = TimeCurrent();
+
+   //--- 1) the symbol specification (same numbers the spec dialog shows)
+   double spec = UTM_CommissionSpec(sym, 1.0);
+
+   //--- 2) real deals of this symbol
+   double inComm = 0.0, inVol = 0.0, outComm = 0.0, outVol = 0.0;
+   datetime from = TimeCurrent() - 365 * 86400;
+
+   if(HistorySelect(from, TimeCurrent() + 86400))
+     {
+      int total = HistoryDealsTotal();
+      for(int i = 0; i < total; i++)
+        {
+         ulong tk = HistoryDealGetTicket(i);
+         if(tk == 0)
+            continue;
+         if((ENUM_DEAL_TYPE)HistoryDealGetInteger(tk, DEAL_TYPE) == DEAL_TYPE_BALANCE)
+            continue;
+         if(sym != "" && HistoryDealGetString(tk, DEAL_SYMBOL) != sym)
+            continue;
+         double vol = HistoryDealGetDouble(tk, DEAL_VOLUME);
+         if(vol <= 0.0)
+            continue;
+         double c = MathAbs(HistoryDealGetDouble(tk, DEAL_COMMISSION));
+         int    e = (int)HistoryDealGetInteger(tk, DEAL_ENTRY);
+         if(e == DEAL_ENTRY_IN)
+           {
+            inComm += c;
+            inVol  += vol;
+           }
+         else if(e == DEAL_ENTRY_OUT || e == DEAL_ENTRY_INOUT || e == DEAL_ENTRY_OUT_BY)
+           {
+            outComm += c;
+            outVol  += vol;
+           }
+        }
+     }
+
+   g_commInPerLot  = (inVol  > 0.0 ? inComm  / inVol  : 0.0);
+   g_commOutPerLot = (outVol > 0.0 ? outComm / outVol : 0.0);
+   bool deals     = (inVol > 0.0 || outVol > 0.0);
+   bool fullRound = (inVol > 0.0 && outVol > 0.0);
+
+   //--- a closed trade is charged on both legs; if only entries exist yet,
+   //--- report the entry charge (some brokers bill the whole round trip there)
+   double dealPerLot = 0.0;
+   if(fullRound)
+      dealPerLot = g_commInPerLot + g_commOutPerLot;
+   else if(inVol > 0.0)
+      dealPerLot = g_commInPerLot;
+   else
+      dealPerLot = g_commOutPerLot;
+
+   //--- the spec is authoritative; real round trips win when they disagree
+   if(spec >= 0.0)
+     {
+      if(fullRound && dealPerLot > 0.0 && MathAbs(dealPerLot - spec) > 0.005)
+        {
+         g_commPerLot = dealPerLot;
+         g_commSource = "成交记录（实际）";
+        }
+      else
+        {
+         g_commPerLot = spec;
+         g_commSource = "品种规格";
+        }
+      g_commDetected = true;
+      return;
+     }
+
+   if(deals)
+     {
+      g_commPerLot   = dealPerLot;
+      g_commDetected = true;
+      g_commSource   = "成交记录";
+      return;
+     }
+
+   g_commPerLot   = 0.0;
+   g_commDetected = false;
+   g_commSource   = "";
+  }
+
+
+//--- -----------------------------------------------------------------
 //--- price / point helpers
 //--- -----------------------------------------------------------------
 int UTM_Digits(const string sym)

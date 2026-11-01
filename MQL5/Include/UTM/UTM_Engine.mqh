@@ -25,7 +25,6 @@ private:
    STrade            m_tr[];
    int               m_count;
    long              m_nextId;
-   CUtmAtr           m_atr;
    SExec             m_exec;
    double            m_emaSpread;
    bool              m_emaInit;
@@ -33,12 +32,14 @@ private:
    datetime          m_lastSave;
    string            m_stateFile;
    bool              m_equityAlert;
-   int               m_atrPeriod;
    int               m_panelX;
    int               m_panelY;
    int               m_panelW;
    int               m_panelH;
    bool              m_panelOnLeft;
+   int               m_lastMouseX;
+   int               m_lastMouseY;
+   uint              m_mouseIgnoreUntil;
    string            m_lastError;
    string            m_lastInfo;
 
@@ -51,6 +52,7 @@ public:
    //--- lifecycle
    void              OnTick();
    void              OnTimer();
+   void              RefreshAll();          // redraw lines/labels now (period / scale change)
    void              OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam);
 
    //--- settings link
@@ -61,8 +63,8 @@ public:
    int               ContentLeftX() const
      {
       if(m_panelOnLeft && m_panelW > 0)
-         return (m_panelX + m_panelW + 14);
-      return 8;
+         return (m_panelX + m_panelW + UTM_UI(14));
+      return UTM_UI(8);
      }
 
    //--- info
@@ -83,6 +85,7 @@ public:
    string            LastError()         const { return m_lastError; }
    string            LastInfo()          const { return m_lastInfo; }
    bool              ExecActive()        const { return m_exec.active; }
+   bool              ExecFollow()        const { return m_exec.follow; }
    int               ExecSide()          const { return m_exec.side; }
    int               ExecMode()          const { return m_exec.mode; }
    double            ExecEntry()         const { return m_exec.entry; }
@@ -104,7 +107,6 @@ public:
    void              CloseAllPositions();
    void              CancelPending();
    void              HalveRisk();
-   void              ToggleTrailingTP();
    void              SetExecEntry(const double price);
    void              ExecSetSL(const double price);
    void              ExecSetTP(const int idx, const double price);
@@ -151,11 +153,14 @@ private:
                                  const double sl, const double tp, const string comment, ulong &ticket);
    bool              OpenNewTrade(const int side, const double entry, const double sl,
                                   const double lot, const bool pending, const int omode);
+   bool              BuildServerSlices(const STrade &t, double &vols[], int &levels[]);
    int               DeriveOrderMode(const int side, const double price);
+   bool              ValidatePendingPrice(const int side, int &omode, double &price, const double sl, string &err);
    double            BaseEntry(const STrade &t);
    void              ComputeTPs(STrade &t);
    void              RegisterSplitTickets(STrade &t, ulong &tickets[], const int n);
    int               CollectTickets(const STrade &t, ulong &tickets[]);
+   void              DeleteTradeOrders(const STrade &t);
    double            TradeVolume(const STrade &t);
    double            TradeProfit(const STrade &t);
    double            CurrentPrice(const STrade &t, const bool forSL);
@@ -196,13 +201,15 @@ CUtmEngine::CUtmEngine()
    m_lastSave    = 0;
    m_stateFile   = "";
    m_equityAlert = false;
-   m_atrPeriod   = 14;
    m_lastError   = "";
    m_panelX      = 0;
    m_panelY      = 0;
    m_panelW      = 0;
    m_panelH      = 0;
    m_panelOnLeft = true;
+   m_lastMouseX  = -1;
+   m_lastMouseY  = -1;
+   m_mouseIgnoreUntil = 0;
    m_lastInfo    = "";
 
    m_exec.active = false;
@@ -246,10 +253,11 @@ bool CUtmEngine::Init(const string tradeSymbol, const string chartSymbol, const 
    StringReplace(s, " ", "");
    m_stateFile = UTM_SETTINGS_FOLDER + "\\state_" + IntegerToString(m_magic) + "_" + s + ".csv";
 
-   m_atr.Init(m_symbol, g_set.atrPeriod);
-   m_atrPeriod = g_set.atrPeriod;
    UpdateSpread();
    m_emaSpread = MathMax(m_emaSpread, UTM_Point(m_symbol));
+
+   //--- commission rate from real deals (used when the panel is in auto mode)
+   UTM_CommissionScan(m_symbol, true);
 
    LoadState();
    Reconcile();
@@ -265,7 +273,6 @@ bool CUtmEngine::Init(const string tradeSymbol, const string chartSymbol, const 
 void CUtmEngine::Deinit()
   {
    SaveState(true);
-   m_atr.Release();
   }
 
 //+------------------------------------------------------------------+
@@ -318,14 +325,11 @@ void CUtmEngine::UpdateSpread()
 void CUtmEngine::OnTick()
   {
    UpdateSpread();
+   if(g_set.commissionAuto)
+      UTM_CommissionScan(m_symbol);
 
    ExecSyncMarket();
 
-   if(m_atrPeriod != g_set.atrPeriod)
-     {
-      m_atrPeriod = g_set.atrPeriod;
-      m_atr.Init(m_symbol, m_atrPeriod);
-     }
 
 
    //--- equity stop
@@ -357,8 +361,25 @@ void CUtmEngine::OnTimer()
    if(!UTM_VisualMode())
       return;
    UpdateSpread();
+   if(g_set.commissionAuto)
+      UTM_CommissionScan(m_symbol);
    DrawAll();
    SaveState(false);
+  }
+
+//+------------------------------------------------------------------+
+//| 图表周期 / 尺寸变化后立即重绘（标签跟住线条）                      |
+//+------------------------------------------------------------------+
+void CUtmEngine::RefreshAll()
+  {
+   if(!UTM_VisualMode())
+      return;
+   //--- 周期切换时终端会补发一次鼠标移动事件，忽略它，避免止损线跳到新周期的价格
+   m_mouseIgnoreUntil = GetTickCount() + 600;
+   m_lastMouseX = -1;
+   m_lastMouseY = -1;
+   DrawAll();
+   ChartRedraw();
   }
 
 //+------------------------------------------------------------------+
@@ -387,6 +408,7 @@ void CUtmEngine::BlankTrade(STrade &t)
    t.tpDone = 0;
    t.beDone = false;
    t.trailingTP = false;
+   t.serverTP   = false;
    t.virtualSL = false;
    t.virtualEntry = false;
    t.orderMode = UTM_ORDER_MARKET;
@@ -466,7 +488,23 @@ void CUtmEngine::Reconcile()
             alive = OrderSelect(m_tr[i].ticket) || PositionSelectByTicket(m_tr[i].ticket);
         }
       else
+        {
          alive = PositionSelectByTicket(m_tr[i].ticket);
+         //--- the main ticket may have been closed by a server TP: keep the group alive
+         if(!alive)
+           {
+            for(int k = 0; k < m_tr[i].splitCount; k++)
+              {
+               if(PositionSelectByTicket(m_tr[i].splits[k]))
+                 {
+                  alive = true;
+                  m_tr[i].ticket = m_tr[i].splits[k];
+                  m_tr[i].splits[k] = 0;
+                  break;
+                 }
+              }
+           }
+        }
 
       if(!alive)
         {
@@ -581,6 +619,22 @@ void CUtmEngine::SyncTrades()
          continue;
         }
 
+      //--- server-side TPs: keep the "next TP" display in step with the price
+      if(m_tr[i].serverTP)
+        {
+         double px = (m_tr[i].type == POSITION_TYPE_BUY ? UTM_Bid(m_symbol) : UTM_Ask(m_symbol));
+         int done = 0;
+         for(int k = 0; k < m_tr[i].tpCount && k < UTM_MAX_TP; k++)
+           {
+            double p = m_tr[i].tp[k];
+            if(p <= 0.0)
+               continue;
+            if(m_tr[i].type == POSITION_TYPE_BUY ? px >= p : px <= p)
+               done++;
+           }
+         m_tr[i].tpDone = done;
+        }
+
       //--- open position
       if(PositionSelectByTicket(m_tr[i].ticket))
          continue;
@@ -625,6 +679,18 @@ int CUtmEngine::CollectTickets(const STrade &t, ulong &tickets[])
       tickets[n] = t.splits[i];
      }
    return ArraySize(tickets);
+  }
+
+//--- delete every pending order of a trade (the main ticket and the splits)
+void CUtmEngine::DeleteTradeOrders(const STrade &t)
+  {
+   if(t.ticket > 0 && OrderSelect(t.ticket))
+      m_trade.OrderDelete(t.ticket);
+   for(int i = 0; i < t.splitCount; i++)
+     {
+      if(t.splits[i] > 0 && OrderSelect(t.splits[i]))
+         m_trade.OrderDelete(t.splits[i]);
+     }
   }
 
 double CUtmEngine::TradeVolume(const STrade &t)
@@ -715,28 +781,6 @@ void CUtmEngine::ManageTrades()
 
       ApplyFormula(i);
 
-      if(m_tr[i].trailingTP)
-        {
-         //--- trailing TP line
-         if(m_tr[i].riskDist > 0.0)
-           {
-            double dir = (m_tr[i].type == POSITION_TYPE_BUY ? 1.0 : -1.0);
-            double level = m_tr[i].entry + dir * m_tr[i].riskDist * (g_set.trailTPRR * (m_tr[i].trailStep + 1));
-            bool hit = (m_tr[i].type == POSITION_TYPE_BUY ? bid >= level : ask <= level);
-            if(hit)
-              {
-               double vol = UTM_NormLot(m_symbol, m_tr[i].lot * g_set.trailTPPct / 100.0);
-               double remaining = TradeVolume(m_tr[i]);
-               if(vol > 0.0 && remaining - vol >= UTM_VolumeMin(m_symbol))
-                 {
-                  PartialClose(i, vol, "移动止盈");
-                  Notify("tp");
-                 }
-               m_tr[i].trailStep++;
-               SaveSoon();
-              }
-           }
-        }
 
      }
   }
@@ -860,6 +904,8 @@ void CUtmEngine::CheckTakeProfits(const int index)
   {
    if(index < 0 || index >= m_count)
       return;
+   if(m_tr[index].serverTP)
+      return;   // server holds one TP per slice, nothing to close here
 
    double bid = UTM_Bid(m_symbol);
    double ask = UTM_Ask(m_symbol);
@@ -1153,21 +1199,99 @@ bool CUtmEngine::SendMarket(const int side, const double volume, const double sl
   {
    ticket = 0;
    bool ok = false;
-   double p = (side == POSITION_TYPE_BUY ? UTM_Ask(m_symbol) : UTM_Bid(m_symbol));
 
-   if(side == POSITION_TYPE_BUY)
-      ok = m_trade.Buy(volume, m_symbol, p, sl, tp, comment);
-   else
-      ok = m_trade.Sell(volume, m_symbol, p, sl, tp, comment);
+   //--- 市价单用 price=0，由终端按最新价成交（指定旧价在慢网络 / macOS 上易被拒）
+   ENUM_ORDER_TYPE_FILLING modes[3] = {ORDER_FILLING_FOK, ORDER_FILLING_IOC, ORDER_FILLING_RETURN};
+   uint rc = 0;
+   for(int i = 0; i < 3 && !ok; i++)
+     {
+      m_trade.SetTypeFilling(modes[i]);
+      if(side == POSITION_TYPE_BUY)
+         ok = m_trade.Buy(volume, m_symbol, 0.0, sl, tp, comment);
+      else
+         ok = m_trade.Sell(volume, m_symbol, 0.0, sl, tp, comment);
+      if(ok)
+         break;
+      rc = m_trade.ResultRetcode();
+      //--- 10030 = 不支持的成交方式；其余错误换成交方式也没用
+      if(rc != 10030)
+         break;
+     }
 
    if(!ok)
      {
-      PushError("下单失败：" + m_trade.ResultRetcodeDescription());
+      string hint = "";
+      if(rc == 10021)      hint = "（券商当前没有可成交报价：休市 / 加密品种周末无流动性 / 价格离现价太远）";
+      else if(rc == 10016) hint = "（止损或止盈离入场价太近）";
+      else if(rc == 10015) hint = "（价格无效）";
+      else if(rc == 10027) hint = "（终端未开启算法交易）";
+      else if(rc == 10019) hint = "（资金不足）";
+      PushError("下单失败：" + m_trade.ResultRetcodeDescription() + hint +
+                " (code " + IntegerToString((int)rc) + ")");
+      if(!MQLInfoInteger(MQL_TESTER))
+         Alert("UTM 下单失败：", m_trade.ResultRetcodeDescription(), hint, " (", (int)rc, ")");
       return false;
      }
    ticket = m_trade.ResultOrder();
    if(ticket == 0)
       ticket = m_trade.ResultDeal();
+   m_trade.SetTypeFillingBySymbol(m_symbol);
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| 挂单价校验：吸附到最小变动价位、检查最小距离、按价格纠正限价/突破   |
+//+------------------------------------------------------------------+
+bool CUtmEngine::ValidatePendingPrice(const int side, int &omode, double &price, const double sl, string &err)
+  {
+   double ask = UTM_Ask(m_symbol);
+   double bid = UTM_Bid(m_symbol);
+   if(ask <= 0.0 || bid <= 0.0)
+     {
+      err = "暂无报价，稍后重试";
+      return false;
+     }
+
+   double ts = SymbolInfoDouble(m_symbol, SYMBOL_TRADE_TICK_SIZE);
+   double pt = UTM_Point(m_symbol);
+   if(ts <= 0.0)
+      ts = pt;
+   if(pt <= 0.0)
+      pt = ts;
+   if(ts <= 0.0)
+      ts = 0.00001;
+
+   int    lvl  = (int)SymbolInfoInteger(m_symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double mk   = (side == POSITION_TYPE_BUY ? ask : bid);
+   double stop = MathMax(lvl * pt, UTM_RawSpread(m_symbol)) + ts;
+   if(stop < ts * 2.0)
+      stop = ts * 2.0;
+
+   double p = MathRound(price / ts) * ts;
+   p = UTM_NormPrice(m_symbol, p);
+
+   if(MathAbs(p - mk) < stop)
+     {
+      err = "入场价离现价太近（需 ≥ " + DoubleToString(UTM_PriceToPips(m_symbol, stop), 1) + " 点）";
+      return false;
+     }
+
+   //--- 止损也要离入场价足够远
+   if(sl > 0.0 && lvl > 0)
+     {
+      double minSL = lvl * pt + ts;
+      if(MathAbs(p - sl) < minSL)
+        {
+         err = "止损离入场价太近（需 ≥ " + DoubleToString(UTM_PriceToPips(m_symbol, minSL), 1) + " 点）";
+         return false;
+        }
+     }
+
+   //--- 价格在现价上方/下方决定是突破还是限价
+   omode = (side == POSITION_TYPE_BUY
+            ? (p < mk ? UTM_ORDER_LIMIT : UTM_ORDER_STOP)
+            : (p > mk ? UTM_ORDER_LIMIT : UTM_ORDER_STOP));
+   price = p;
    return true;
   }
 
@@ -1178,27 +1302,47 @@ bool CUtmEngine::SendPending(const int side, const int omode, const double price
    double p = UTM_NormPrice(m_symbol, price);
    bool ok = false;
 
-   if(side == POSITION_TYPE_BUY)
+   ENUM_ORDER_TYPE_FILLING modes[3] = {ORDER_FILLING_RETURN, ORDER_FILLING_FOK, ORDER_FILLING_IOC};
+   uint rc = 0;
+   for(int i = 0; i < 3 && !ok; i++)
      {
-      if(omode == UTM_ORDER_LIMIT)
-         ok = m_trade.BuyLimit(volume, p, m_symbol, sl, tp, ORDER_TIME_GTC, 0, comment);
+      m_trade.SetTypeFilling(modes[i]);
+      if(side == POSITION_TYPE_BUY)
+        {
+         if(omode == UTM_ORDER_LIMIT)
+            ok = m_trade.BuyLimit(volume, p, m_symbol, sl, tp, ORDER_TIME_GTC, 0, comment);
+         else
+            ok = m_trade.BuyStop(volume, p, m_symbol, sl, tp, ORDER_TIME_GTC, 0, comment);
+        }
       else
-         ok = m_trade.BuyStop(volume, p, m_symbol, sl, tp, ORDER_TIME_GTC, 0, comment);
-     }
-   else
-     {
-      if(omode == UTM_ORDER_LIMIT)
-         ok = m_trade.SellLimit(volume, p, m_symbol, sl, tp, ORDER_TIME_GTC, 0, comment);
-      else
-         ok = m_trade.SellStop(volume, p, m_symbol, sl, tp, ORDER_TIME_GTC, 0, comment);
+        {
+         if(omode == UTM_ORDER_LIMIT)
+            ok = m_trade.SellLimit(volume, p, m_symbol, sl, tp, ORDER_TIME_GTC, 0, comment);
+         else
+            ok = m_trade.SellStop(volume, p, m_symbol, sl, tp, ORDER_TIME_GTC, 0, comment);
+        }
+      if(ok)
+         break;
+      rc = m_trade.ResultRetcode();
+      if(rc != 10030)
+         break;
      }
 
    if(!ok)
      {
-      PushError("挂单失败：" + m_trade.ResultRetcodeDescription());
+      string hint = "";
+      if(rc == 10021)      hint = "（券商当前没有可成交报价：休市 / 加密品种周末无流动性 / 价格离现价太远）";
+      else if(rc == 10016) hint = "（止损/止盈离入场价太近）";
+      else if(rc == 10015) hint = "（价格无效）";
+      else if(rc == 10027) hint = "（终端未开启算法交易）";
+      PushError("挂单失败：" + m_trade.ResultRetcodeDescription() + hint +
+                " (code " + IntegerToString((int)rc) + ")");
+      if(!MQLInfoInteger(MQL_TESTER))
+         Alert("UTM 挂单失败：", m_trade.ResultRetcodeDescription(), hint, " (", (int)rc, ")");
       return false;
      }
    ticket = m_trade.ResultOrder();
+   m_trade.SetTypeFillingBySymbol(m_symbol);
    return true;
   }
 
@@ -1230,6 +1374,68 @@ int CUtmEngine::DeriveOrderMode(const int side, const double price)
 //+------------------------------------------------------------------+
 //| Register split tickets                                            |
 //+------------------------------------------------------------------+
+//| 多级止盈：把总手数拆成「每一级止盈一个仓位」，各自挂服务器止盈      |
+//| 返回 false = 拆不了（手数低于最小手数 / 只有一级 / 未开启）         |
+//+------------------------------------------------------------------+
+bool CUtmEngine::BuildServerSlices(const STrade &t, double &vols[], int &levels[])
+  {
+   ArrayResize(vols, 0);
+   ArrayResize(levels, 0);
+
+   if(!g_set.serverSplitTP)
+      return false;
+   if(!UTM_IsHedging())
+      return false;   // netting accounts can only hold one position per symbol
+   if(t.tpCount < 2 || t.lot <= 0.0)
+      return false;
+
+   double vmin = UTM_VolumeMin(m_symbol);
+   double vmax = UTM_VolumeMax(m_symbol);
+   if(vmin <= 0.0)
+      return false;
+
+   int    idx[UTM_MAX_TP];
+   double pct[UTM_MAX_TP];
+   int    n = 0;
+   double sumPct = 0.0;
+
+   for(int i = 0; i < t.tpCount && i < UTM_MAX_TP; i++)
+     {
+      if(t.tpPct[i] <= 0.0 || t.tp[i] <= 0.0)
+         continue;
+      idx[n]  = i;
+      pct[n]  = t.tpPct[i];
+      sumPct += t.tpPct[i];
+      n++;
+     }
+
+   if(n < 2)
+      return false;
+
+   ArrayResize(vols, n);
+   ArrayResize(levels, n);
+
+   double assigned = 0.0;
+   for(int k = 0; k < n; k++)
+     {
+      double v = (k == n - 1
+                  ? UTM_NormLot(m_symbol, t.lot - assigned)
+                  : UTM_NormLot(m_symbol, t.lot * pct[k] / sumPct));
+      if(v < vmin || (vmax > 0.0 && v > vmax))
+         return false;
+      vols[k]    = v;
+      levels[k]  = idx[k];
+      assigned  += v;
+     }
+
+   //--- the slices must add up to the planned volume (one lot step tolerance)
+   if(MathAbs(assigned - t.lot) > UTM_VolumeStep(m_symbol) * 0.51)
+      return false;
+
+   return true;
+  }
+
+//+------------------------------------------------------------------+
 void CUtmEngine::RegisterSplitTickets(STrade &t, ulong &tickets[], const int n)
   {
    t.splitCount = 0;
@@ -1250,6 +1456,13 @@ void CUtmEngine::RegisterSplitTickets(STrade &t, ulong &tickets[], const int n)
 bool CUtmEngine::OpenNewTrade(const int side, const double entry, const double sl,
                               const double lot, const bool pending, const int omode)
   {
+   if(!MQLInfoInteger(MQL_TESTER) &&
+      (!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !MQLInfoInteger(MQL_TRADE_ALLOWED)))
+     {
+      PushError("自动交易未开启：请点终端工具栏的“算法交易”按钮后再试");
+      Alert("UTM：自动交易未开启，请点终端工具栏的“算法交易”按钮");
+      return false;
+     }
    if(!Risk_EquityOK(g_set))
      {
       PushError("已触发净值止损，禁止开仓");
@@ -1290,7 +1503,6 @@ bool CUtmEngine::OpenNewTrade(const int side, const double entry, const double s
       t.tpRR[i]  = (i < t.tpCount ? g_set.tpRR[i] : 0.0);
       t.tpPct[i] = (i < t.tpCount ? g_set.tpPct[i] : 0.0);
      }
-   t.trailingTP = g_set.trailingTP;
    t.trailStep = 0;
 
    bool ignore = (g_set.spreadMode == UTM_SPREAD_IGNORE || g_set.spreadMode == UTM_SPREAD_INVISIBLE);
@@ -1307,42 +1519,102 @@ bool CUtmEngine::OpenNewTrade(const int side, const double entry, const double s
       t.virtualSL = (ignore && side == POSITION_TYPE_SELL) || invisible;
      }
 
-   //--- broker TP only when the whole position closes at TP1
-   double brokerTP = 0.0;
-   if(!invisible && t.tpCount == 1 && t.tpPct[0] >= 99.9)
+   //--- take profits: one position per level when possible, else a broker TP
+   ComputeTPs(t);
+
+   //--- validate the pending price (snap to tick, check distance, fix limit/stop)
+   int pmode = omode;
+   if(pending && !t.virtualEntry)
      {
-      ComputeTPs(t);
-      brokerTP = t.tp[0];
+      string perr = "";
+      double pprice = t.entry;
+      if(!ValidatePendingPrice(side, pmode, pprice, t.sl, perr))
+        {
+         PushError("挂单失败：" + perr);
+         if(!MQLInfoInteger(MQL_TESTER))
+            Alert("UTM 挂单失败：", perr);
+         return false;
+        }
+      if(pmode != omode)
+        {
+         Print("[UTM] 入场价已越过现价，挂单类型自动改为 ",
+               (pmode == UTM_ORDER_LIMIT ? "限价" : "突破"));
+         m_lastInfo = (pmode == UTM_ORDER_LIMIT ? "按限价挂单" : "按突破挂单");
+         t.orderMode = pmode;
+        }
+      if(MathAbs(pprice - t.entry) > 0.0)
+        {
+         t.entry = pprice;
+         ComputeTPs(t);
+        }
+     }
+
+   double sVols[];
+   int    sLevels[];
+   bool   serverTP = (!invisible && !t.virtualEntry && !pending &&
+                      BuildServerSlices(t, sVols, sLevels));
+
+   double pctSum = 0.0;
+   for(int i = 0; i < t.tpCount && i < UTM_MAX_TP; i++)
+      pctSum += t.tpPct[i];
+
+   double brokerTP = 0.0;
+   if(!serverTP && !invisible && t.tpCount > 0)
+     {
+      //--- fallback when the volume is too small to split: exit everything at the last TP
+      if(g_set.serverSplitTP && pctSum >= 99.9)
+         brokerTP = t.tp[t.tpCount - 1];
+      else if(t.tpCount == 1 && t.tpPct[0] >= 99.9)
+         brokerTP = t.tp[0];
      }
 
    double brokerSL = (t.virtualSL ? 0.0 : t.sl);
    if(t.virtualSL && g_set.failsafeSL && t.riskDist > 0.0)
       brokerSL = t.entry + (side == POSITION_TYPE_BUY ? -2.0 : 2.0) * t.riskDist;
 
-   //--- split the volume when it exceeds the broker maximum
-   double bmax = UTM_VolumeMax(m_symbol);
-   int parts = 1;
-   if(g_set.bypassMaxLot && lot > bmax)
+   //--- build the send plan: one order per TP level, or split by the broker max lot
+   double planVol[];
+   double planTP[];
+   if(serverTP)
      {
-      parts = (int)MathCeil(lot / bmax);
-      if(parts > UTM_MAX_SPLIT)
-         parts = UTM_MAX_SPLIT;
+      int n = ArraySize(sVols);
+      ArrayResize(planVol, n);
+      ArrayResize(planTP, n);
+      for(int k = 0; k < n; k++)
+        {
+         planVol[k] = sVols[k];
+         planTP[k]  = t.tp[sLevels[k]];
+        }
+     }
+   else
+     {
+      double bmax = UTM_VolumeMax(m_symbol);
+      int parts = 1;
+      if(g_set.bypassMaxLot && lot > bmax)
+        {
+         parts = (int)MathCeil(lot / bmax);
+         if(parts > UTM_MAX_SPLIT)
+            parts = UTM_MAX_SPLIT;
+        }
+      ArrayResize(planVol, parts);
+      ArrayResize(planTP, parts);
+      double remaining = lot;
+      for(int k = 0; k < parts; k++)
+        {
+         double vol = (k == parts - 1 ? UTM_NormLot(m_symbol, remaining)
+                                      : UTM_NormLot(m_symbol, lot / parts));
+         planVol[k] = vol;
+         planTP[k]  = brokerTP;
+         remaining -= vol;
+        }
      }
 
-   double remaining = lot;
    ulong tickets[];
    ArrayResize(tickets, 0);
 
-   for(int k = 0; k < parts; k++)
+   for(int k = 0; k < ArraySize(planVol); k++)
      {
-      double vol = (parts == 1 ? lot : MathMin(remaining, bmax));
-      vol = UTM_NormLot(m_symbol, vol);
-      double piece = UTM_NormLot(m_symbol, lot / parts);
-      if(k == parts - 1)
-         vol = UTM_NormLot(m_symbol, remaining);
-      else
-         vol = piece;
-
+      double vol = planVol[k];
       if(vol < UTM_VolumeMin(m_symbol))
          break;
 
@@ -1356,9 +1628,9 @@ bool CUtmEngine::OpenNewTrade(const int side, const double entry, const double s
          ok = true;
         }
       else if(pending)
-         ok = SendPending(side, omode, t.entry, vol, brokerSL, brokerTP, cmt, tk);
+         ok = SendPending(side, pmode, t.entry, vol, brokerSL, planTP[k], cmt, tk);
       else
-         ok = SendMarket(side, vol, brokerSL, brokerTP, cmt, tk);
+         ok = SendMarket(side, vol, brokerSL, planTP[k], cmt, tk);
 
       if(!ok)
         {
@@ -1379,10 +1651,10 @@ bool CUtmEngine::OpenNewTrade(const int side, const double entry, const double s
          ArrayResize(tickets, n + 1);
          tickets[n] = tk;
         }
-      remaining -= vol;
-      if(remaining < UTM_VolumeMin(m_symbol))
-         break;
      }
+
+   if(serverTP)
+      t.serverTP = true;
 
    if(ArraySize(tickets) > 0)
       RegisterSplitTickets(t, tickets, ArraySize(tickets));
@@ -1410,11 +1682,14 @@ void CUtmEngine::ActivateExec(const int side)
   {
    m_exec.active = true;
    m_exec.side   = side;
-   m_exec.mode   = UTM_ORDER_MARKET;
-   m_exec.stage  = 0;          // market: only the SL line, it follows the mouse
+   int dm = g_set.defaultOrderMode;
+   if(dm != UTM_ORDER_LIMIT && dm != UTM_ORDER_STOP)
+      dm = UTM_ORDER_MARKET;
+   m_exec.mode   = dm;
+   m_exec.stage  = (dm == UTM_ORDER_MARKET ? 0 : 1);   // pending: pick the entry first
    m_exec.follow = true;
 
-   double slDist = Risk_SLDistance(m_symbol, g_set, m_atr.Value());
+   double slDist = Risk_SLDistance(m_symbol, g_set);
    if(slDist <= 0.0)
       slDist = UTM_PipsToPrice(m_symbol, 20.0);
 
@@ -1434,7 +1709,9 @@ void CUtmEngine::ActivateExec(const int side)
 
    m_exec.lot = ExecLot();
    ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, true);
-   m_lastInfo = "移动止损线到目标位置，点击左键下单";
+   m_lastInfo = (dm == UTM_ORDER_MARKET
+                 ? "移动止损线到目标位置，左键点击下单"
+                 : "第一次点击确定入场线，再点一次挂单");
    DrawExec();
    DrawHud();
    ChartRedraw();
@@ -1466,7 +1743,7 @@ void CUtmEngine::SwitchSide(const int side)
 
    double slDist = MathAbs(m_exec.entry - m_exec.sl);
    if(slDist <= 0.0)
-      slDist = Risk_SLDistance(m_symbol, g_set, m_atr.Value());
+      slDist = Risk_SLDistance(m_symbol, g_set);
    if(slDist <= 0.0)
       slDist = UTM_PipsToPrice(m_symbol, 20.0);
 
@@ -1505,7 +1782,7 @@ void CUtmEngine::ExecSetMode(const int mode)
   {
    m_exec.mode = mode;
 
-   double slDist = Risk_SLDistance(m_symbol, g_set, m_atr.Value());
+   double slDist = Risk_SLDistance(m_symbol, g_set);
    if(slDist <= 0.0)
       slDist = UTM_PipsToPrice(m_symbol, 20.0);
 
@@ -1563,7 +1840,7 @@ void CUtmEngine::SetExecEntry(const double price)
    if(!m_exec.active)
       return;
 
-   double dist = Risk_SLDistance(m_symbol, g_set, m_atr.Value());
+   double dist = Risk_SLDistance(m_symbol, g_set);
    if(dist <= 0.0)
       dist = MathAbs(m_exec.entry - m_exec.sl);
    if(dist <= 0.0)
@@ -1604,7 +1881,7 @@ void CUtmEngine::ExecClickAt(const double price)
      {
       double dist = MathAbs(m_exec.entry - m_exec.sl);
       if(dist <= 0.0)
-         dist = Risk_SLDistance(m_symbol, g_set, m_atr.Value());
+         dist = Risk_SLDistance(m_symbol, g_set);
       if(dist <= 0.0)
          dist = UTM_PipsToPrice(m_symbol, 20.0);
       m_exec.entry = p;
@@ -1635,7 +1912,14 @@ void CUtmEngine::ExecConfirm()
    //--- market order: click = send
    if(m_exec.mode == UTM_ORDER_MARKET || m_exec.stage == 0)
      {
-      ExecuteNow();
+      if(!ExecuteNow())
+        {
+         //--- 下单失败：让线继续跟随鼠标，方便调整后重试
+         m_exec.follow = true;
+         DrawExec();
+         DrawHud();
+         ChartRedraw();
+        }
       return;
      }
 
@@ -1652,7 +1936,14 @@ void CUtmEngine::ExecConfirm()
      }
 
    //--- second click: place the stop loss and send
-   ExecuteNow();
+   if(!ExecuteNow())
+     {
+      //--- 下单失败：恢复鼠标跟随
+      m_exec.follow = true;
+      DrawExec();
+      DrawHud();
+      ChartRedraw();
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -1695,7 +1986,7 @@ void CUtmEngine::ExecMouseMove(const int x, const int y)
          return;
       double dist = MathAbs(m_exec.entry - m_exec.sl);
       if(dist <= 0.0)
-         dist = Risk_SLDistance(m_symbol, g_set, m_atr.Value());
+         dist = Risk_SLDistance(m_symbol, g_set);
       m_exec.entry = p;
       m_exec.sl = UTM_NormPrice(m_symbol, p - (m_exec.side == POSITION_TYPE_BUY ? dist : -dist));
      }
@@ -1902,7 +2193,7 @@ bool CUtmEngine::QuickTrade(const int side)
   {
    m_lastError = "";
    double entry = (side == POSITION_TYPE_BUY ? UTM_Ask(m_symbol) : UTM_Bid(m_symbol));
-   double slDist = Risk_SLDistance(m_symbol, g_set, m_atr.Value());
+   double slDist = Risk_SLDistance(m_symbol, g_set);
    if(slDist <= 0.0)
      {
       PushError("止损大小为 0");
@@ -1973,8 +2264,10 @@ void CUtmEngine::CancelPending()
      {
       if(!m_tr[i].pending)
          continue;
-      if(!m_tr[i].virtualEntry && m_tr[i].ticket > 0)
-         m_trade.OrderDelete(m_tr[i].ticket);
+      if(!m_tr[i].virtualEntry)
+        {
+         DeleteTradeOrders(m_tr[i]);
+        }
       RemoveAt(i);
      }
    m_lastInfo = "已撤销全部挂单";
@@ -1989,11 +2282,6 @@ void CUtmEngine::HalveRisk()
    m_lastInfo = "风险已减半";
   }
 
-void CUtmEngine::ToggleTrailingTP()
-  {
-   g_set.trailingTP = !g_set.trailingTP;
-   m_lastInfo = (g_set.trailingTP ? "移动止盈：开" : "移动止盈：关");
-  }
 
 //+------------------------------------------------------------------+
 //| Trade modification by id (chart drag / buttons)                   |
@@ -2225,7 +2513,8 @@ void CUtmEngine::SaveState(const bool force)
                     + IntegerToString((long)m_tr[i].opened) + "|"
                     + splits + "|"
                     + m_tr[i].comment + "|"
-                    + rrCsv + "|" + pctCsv + "|" + pxCsv;
+                    + rrCsv + "|" + pctCsv + "|" + pxCsv + "|"
+                    + (m_tr[i].serverTP ? "1" : "0");
 
       FileWrite(h, line);
      }
@@ -2312,6 +2601,9 @@ void CUtmEngine::LoadState()
                t.tp[i] = StringToDouble(a[i]);
         }
 
+      if(ArraySize(p) > 27)
+         t.serverTP = (StringToInteger(p[27]) != 0);
+
       if(t.riskDist <= 0.0)
          t.riskDist = MathAbs(t.entry - t.sl);
 
@@ -2384,6 +2676,8 @@ void CUtmEngine::OnChartEvent(const int id, const long &lparam, const double &dp
          ToggleExec();
          return;
         }
+
+      //--- 所有功能键都要求先进入执行模式，避免误触（ESC 除外）
       if(!m_exec.active)
          return;
 
@@ -2398,7 +2692,6 @@ void CUtmEngine::OnChartEvent(const int id, const long &lparam, const double &dp
          case 80:  ExecSetMode(UTM_ORDER_STOP);    break; // P
          case 69:  BreakEvenAll();         break;   // E
          case 67:  CancelPending();        break;   // C
-         case 84:  ToggleTrailingTP();     break;   // T
          case 82:  HalveRisk();            break;   // R
          case 88:  CloseAllPositions();    break;   // X
          default: break;
@@ -2410,7 +2703,20 @@ void CUtmEngine::OnChartEvent(const int id, const long &lparam, const double &dp
      {
       if(!m_exec.active || !m_exec.follow)
          return;
-      ExecMouseMove((int)lparam, (int)dparam);
+      int mx = (int)lparam;
+      int my = (int)dparam;
+      //--- 周期 / 缩放切换后终端会补发同一像素位置的移动事件，跳过它
+      if(GetTickCount() < m_mouseIgnoreUntil)
+        {
+         m_lastMouseX = mx;
+         m_lastMouseY = my;
+         return;
+        }
+      if(mx == m_lastMouseX && my == m_lastMouseY)
+         return;
+      m_lastMouseX = mx;
+      m_lastMouseY = my;
+      ExecMouseMove(mx, my);
       return;
      }
 
@@ -2541,7 +2847,7 @@ void CUtmEngine::CreateLabel(const string name, const int x, const int y, const 
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    ObjectSetString(0, name, OBJPROP_FONT, bold ? "Microsoft YaHei" : "Microsoft YaHei");
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UTM_UIFont(size));
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
   }
 
@@ -2564,7 +2870,7 @@ void CUtmEngine::CreateButton(const string name, const int x, const int y, const
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UTM_UIFont(size));
   }
 
 void CUtmEngine::PriceToY(const double price, int &y)
@@ -2651,7 +2957,7 @@ void CUtmEngine::DrawTrade(const STrade &t)
          int sy = -1;
          PriceToY(t.sl, sy);
          if(sy > 0 && sy < chartH)
-            CreateLabel(pfx + "LBL_SL", leftX + 2, (sy > chartH - 60 ? sy - 16 : sy + 3),
+            CreateLabel(pfx + "LBL_SL", leftX + UTM_UI(2), (sy > chartH - UTM_UI(60) ? sy - UTM_UI(16) : sy + UTM_UI(3)),
                         "止损 " + DoubleToString(UTM_PriceToPips(m_symbol, MathAbs(t.entry - t.sl)), 1) + " 点",
                         g_style.sl, 7, false);
          else
@@ -2668,7 +2974,7 @@ void CUtmEngine::DrawTrade(const STrade &t)
             int ty = -1;
             PriceToY(t.tp[i], ty);
             if(ty > 0 && ty < chartH)
-               CreateLabel(nt, leftX + 2, (ty > chartH - 60 ? ty - 16 : ty + 3),
+               CreateLabel(nt, leftX + UTM_UI(2), (ty > chartH - UTM_UI(60) ? ty - UTM_UI(16) : ty + UTM_UI(3)),
                            "止盈" + IntegerToString(i + 1) + "  " +
                            DoubleToString(t.tpRR[i], 2) + "R  " +
                            DoubleToString(t.tpPct[i], 0) + "%",
@@ -2692,7 +2998,7 @@ void CUtmEngine::DrawTrade(const STrade &t)
 
    if(t.pending)
      {
-      left = "#" + IntegerToString(t.id) + "  " + DoubleToString(t.lot, 2) + " 手  " +
+      left = "#" + IntegerToString(t.id) + "  " + UTM_Priv(DoubleToString(t.lot, 2) + " 手") + "  " +
              (t.type == POSITION_TYPE_BUY ? "买入" : "卖出") + " " +
              (t.orderMode == UTM_ORDER_LIMIT ? "限价" : "突破");
       right = "入场 " + UTM_FmtPrice(m_symbol, t.entry);
@@ -2700,13 +3006,15 @@ void CUtmEngine::DrawTrade(const STrade &t)
    else
      {
       double prof = TradeProfit(t);
-      if(g_set.commissionPerLot > 0.0)
-         prof -= g_set.commissionPerLot * TradeVolume(t);
+      double commRate = UTM_CommissionPerLot(g_set);
+      if(commRate != 0.0)
+         prof -= commRate * TradeVolume(t);
       double bal = UTM_BalanceForRisk(g_set.overrideBalance);
       double pct = (bal > 0.0 ? prof / bal * 100.0 : 0.0);
       double rr = (t.riskMoney > 0.0 ? prof / t.riskMoney : 0.0);
-      left = "#" + IntegerToString(t.id) + "  " + DoubleToString(t.lot, 2) + " 手  " +
-             (prof >= 0 ? "+" : "") + UTM_FmtMoney(prof) + " (" + DoubleToString(pct, 2) + "%)  盈亏比 " + UTM_FmtRR(rr);
+      left = "#" + IntegerToString(t.id) + "  " + UTM_Priv(DoubleToString(t.lot, 2) + " 手") + "  " +
+             UTM_Priv((prof >= 0 ? "+" : "") + UTM_FmtMoney(prof) + " (" + DoubleToString(pct, 2) + "%)") +
+             "  盈亏比 " + UTM_Priv(UTM_FmtRR(rr));
       right = "止损 " + DoubleToString(UTM_PriceToPips(m_symbol, MathAbs(t.entry - t.sl)), 1) + " 点";
       if(t.tpCount > 0)
         {
@@ -2714,25 +3022,23 @@ void CUtmEngine::DrawTrade(const STrade &t)
          right += "  |  止盈" + IntegerToString(nxt + 1) + " " +
                   DoubleToString(t.tpRR[nxt], 2) + "R " + DoubleToString(t.tpPct[nxt], 0) + "%";
         }
-      if(t.trailingTP)
-         right += "  |  移动止盈";
      }
 
    if(!g_set.memorySave && yEntry > 0 && yEntry < chartH)
      {
       int lx = leftX;
-      int ly = yEntry - 26;
+      int ly = yEntry - UTM_UI(26);
       if(ly < 2)
-         ly = yEntry + 4;
+         ly = yEntry + UTM_UI(4);
          CreateLabel(pfx + "LBL_L", lx, ly, left, UTM_CLR_TEXT, 8, false);
       CreateLabel(pfx + "LBL_R", rightX, ly, right, UTM_CLR_TEXT_DIM, 8, false);
 
       //--- 快捷按钮
-      int bx = rightX + 190;
-      if(bx + 62 < chartW - 8)
+      int bx = rightX + UTM_UI(190);
+      if(bx + UTM_UI(62) < chartW - 8)
         {
-         CreateButton(pfx + "BTN_P", bx, yEntry - 24, 30, 16, "50%", UTM_CLR_BG_ALT, UTM_CLR_TEXT, 7);
-         CreateButton(pfx + "BTN_X", bx + 32, yEntry - 24, 18, 16, "X",
+         CreateButton(pfx + "BTN_P", bx, yEntry - UTM_UI(24), UTM_UI(30), UTM_UI(16), "50%", UTM_CLR_BG_ALT, UTM_CLR_TEXT, 7);
+         CreateButton(pfx + "BTN_X", bx + UTM_UI(32), yEntry - UTM_UI(24), UTM_UI(18), UTM_UI(16), "X",
                       (t.pending ? UTM_CLR_WARN : UTM_CLR_SELL), C'255,255,255', 7);
         }
      }
@@ -2800,8 +3106,8 @@ void CUtmEngine::DrawHud()
 
       line1 = "执行中   " + sideTxt + "   " + modeTxt + "   |   " + stageTxt;
       line2 = "止损 " + DoubleToString(ExecSLPips(), 1) + " 点" +
-              "      手数 " + DoubleToString(ExecLot(), 2) +
-              "      风险 " + UTM_FmtMoney(ExecRisk());
+              "      手数 " + UTM_Priv(DoubleToString(ExecLot(), 2)) +
+              "      风险 " + UTM_Priv(UTM_FmtMoney(ExecRisk()));
 
       bgClr  = C'16,36,32';
       brClr  = UTM_CLR_ACCENT;
@@ -2820,20 +3126,20 @@ void CUtmEngine::DrawHud()
    int ch = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
 
    //--- all HUD objects use the upper-left corner so the geometry is predictable
-   int h = (active ? 40 : 22);
-   int w = 430;
-   if(w > cw - 16)
-      w = cw - 16;
-   if(w < 140)
-      w = 140;
-   int x = 8;
+   int h = UTM_UI(active ? 40 : 22);
+   int w = UTM_UI(430);
+   if(w > cw - UTM_UI(16))
+      w = cw - UTM_UI(16);
+   if(w < UTM_UI(140))
+      w = UTM_UI(140);
+   int x = UTM_UI(8);
    //--- when the panel is on the left and reaches the bottom, move the HUD next to it
-   int y0 = ch - h - 10;
-   if(m_panelOnLeft && m_panelW > 0 && y0 < (m_panelY + m_panelH + 6))
-      x = m_panelX + m_panelW + 14;
+   int y0 = ch - h - UTM_UI(10);
+   if(m_panelOnLeft && m_panelW > 0 && y0 < (m_panelY + m_panelH + UTM_UI(6)))
+      x = m_panelX + m_panelW + UTM_UI(14);
    int y = y0;
-   if(x + w > cw - 8)
-      w = MathMax(120, cw - 8 - x);
+   if(x + w > cw - UTM_UI(8))
+      w = MathMax(UTM_UI(120), cw - UTM_UI(8) - x);
    if(y < 2)
       y = 2;
 
@@ -2873,10 +3179,10 @@ void CUtmEngine::DrawHud()
      }
    ObjectSetInteger(0, t1, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, t1, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
-   ObjectSetInteger(0, t1, OBJPROP_XDISTANCE, x + 9);
-   ObjectSetInteger(0, t1, OBJPROP_YDISTANCE, y + 4);
+   ObjectSetInteger(0, t1, OBJPROP_XDISTANCE, x + UTM_UI(9));
+   ObjectSetInteger(0, t1, OBJPROP_YDISTANCE, y + UTM_UI(4));
    ObjectSetString(0, t1, OBJPROP_TEXT, line1);
-   ObjectSetInteger(0, t1, OBJPROP_FONTSIZE, 9);
+   ObjectSetInteger(0, t1, OBJPROP_FONTSIZE, UTM_UIFont(10));
    ObjectSetInteger(0, t1, OBJPROP_COLOR, txtClr);
 
    //--- line 2 (stop loss / lots / risk)
@@ -2891,10 +3197,10 @@ void CUtmEngine::DrawHud()
         }
       ObjectSetInteger(0, t2, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, t2, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
-      ObjectSetInteger(0, t2, OBJPROP_XDISTANCE, x + 9);
-      ObjectSetInteger(0, t2, OBJPROP_YDISTANCE, y + 21);
+      ObjectSetInteger(0, t2, OBJPROP_XDISTANCE, x + UTM_UI(9));
+      ObjectSetInteger(0, t2, OBJPROP_YDISTANCE, y + UTM_UI(21));
       ObjectSetString(0, t2, OBJPROP_TEXT, line2);
-      ObjectSetInteger(0, t2, OBJPROP_FONTSIZE, 9);
+      ObjectSetInteger(0, t2, OBJPROP_FONTSIZE, UTM_UIFont(10));
       ObjectSetInteger(0, t2, OBJPROP_COLOR, UTM_CLR_WARN);
      }
    else if(ObjectFind(0, t2) >= 0)
@@ -2950,7 +3256,7 @@ void CUtmEngine::DrawExec()
          int ty = -1;
          PriceToY(m_exec.tp[i], ty);
          if(ty > 0 && !g_set.memorySave)
-            CreateLabel(nml, ContentLeftX(), ty + 3,
+      CreateLabel(nml, ContentLeftX(), ty + UTM_UI(3),
                         "止盈" + IntegerToString(i + 1) + "  " + DoubleToString(g_set.tpRR[i], 2) + "R  " +
                         DoubleToString(g_set.tpPct[i], 0) + "%",
                         g_style.tp, 7, false);
@@ -2977,10 +3283,10 @@ void CUtmEngine::DrawExec()
    if(riskLines && slY > 0)
      {
       string slInfo = "止损 " + DoubleToString(ExecSLPips(), 1) + " 点   手数 " +
-                      DoubleToString(ExecLot(), 2) + "   风险 " + UTM_FmtMoney(ExecRisk());
+                      UTM_Priv(DoubleToString(ExecLot(), 2)) + "   风险 " + UTM_Priv(UTM_FmtMoney(ExecRisk()));
       if(m_exec.follow)
          slInfo += "   ← 跟随鼠标";
-      CreateLabel(nmLblSL, ContentLeftX(), slY + 4, slInfo, g_style.sl, 8, true);
+      CreateLabel(nmLblSL, ContentLeftX(), slY + UTM_UI(4), slInfo, g_style.sl, 8, true);
      }
    else if(ObjectFind(0, nmLblSL) >= 0)
       ObjectDelete(0, nmLblSL);
@@ -2990,8 +3296,8 @@ void CUtmEngine::DrawExec()
       string enInfo = (entryStage
                        ? "点击确定入场价   " + UTM_FmtPrice(m_symbol, m_exec.entry)
                        : "入场 " + UTM_FmtPrice(m_symbol, m_exec.entry) +
-                         "   手数 " + DoubleToString(ExecLot(), 2));
-      CreateLabel(nmLblEN, ContentLeftX(), enY - 18, enInfo,
+                         "   手数 " + UTM_Priv(DoubleToString(ExecLot(), 2)));
+      CreateLabel(nmLblEN, ContentLeftX(), enY - UTM_UI(18), enInfo,
                   (entryStage ? UTM_CLR_ACCENT : UTM_CLR_TEXT), 8, true);
      }
    else if(ObjectFind(0, nmLblEN) >= 0)

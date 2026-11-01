@@ -6,7 +6,8 @@
 #define __UTM_DEFINES_MQH__
 
 #define UTM_NAME            "UTM Manager"
-#define UTM_VERSION         "1.00"
+#define UTM_VERSION         "1.23"
+#define UTM_BUILD           __DATE__
 #define UTM_MAX_TP          4
 #define UTM_MAX_SPLIT       10
 #define UTM_MAX_TRADES      64
@@ -24,8 +25,7 @@ enum ENUM_UTM_RISK_MODE
 enum ENUM_UTM_SL_UNIT
   {
    UTM_SL_POINTS = 0,      // Points
-   UTM_SL_PIPS   = 1,      // Pips
-   UTM_SL_ATR    = 2       // ATR multiplier
+   UTM_SL_PIPS   = 1       // Pips
   };
 
 //--- spread handling
@@ -60,7 +60,7 @@ enum ENUM_UTM_TRAIL_MODE
 #define UTM_CLR_HEADER      C'40,46,56'
 #define UTM_CLR_BORDER      C'60,68,80'
 #define UTM_CLR_TEXT        C'220,224,230'
-#define UTM_CLR_TEXT_DIM    C'140,148,160'
+#define UTM_CLR_TEXT_DIM    C'170,178,192'
 #define UTM_CLR_ACCENT      C'0,176,156'
 #define UTM_CLR_ACCENT_DARK C'0,120,108'
 #define UTM_CLR_BUY         C'46,160,110'
@@ -93,6 +93,7 @@ struct STrade
    int               tpDone;
    bool              beDone;
    bool              trailingTP;
+   bool              serverTP;        // multi-TP opened as one position per level
    bool              virtualSL;       // SL is watched by the manager
    bool              virtualEntry;    // pending entry is watched by the manager
    int               orderMode;       // ENUM_UTM_ORDER_MODE of the pending order
@@ -183,6 +184,10 @@ struct SUtmSettings
    string              tradeSymbol;
    double            commissionPerLot;
    bool              commissionInRisk;
+   bool              commissionAuto;
+   bool              serverSplitTP;
+   int               defaultOrderMode;
+   bool              privacyMode;   // hide balance / equity / profit on screen
    int               panelX;
    int               panelY;
    bool              panelVisible;

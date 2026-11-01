@@ -11,6 +11,8 @@
 #include <UTM/UTM_Engine.mqh>
 #include <UTM/UTM_Panel.mqh>
 
+input double InpScale = 1.0;   // UI scale under test
+
 CUtmEngine g_eng;
 CUtmPanel  g_pnl;
 bool       g_done = false;
@@ -31,6 +33,7 @@ int CountPanelObjects()
 int OnInit()
   {
    g_utmForceUI = true;
+   g_uiScale = InpScale;
    UTM_SetDefaults(g_set);
    g_set.sounds = false;
    g_set.tpCount = 3;
@@ -40,7 +43,6 @@ int OnInit()
    g_set.tpRR[0] = 1.0;
    g_set.tpRR[1] = 2.0;
    g_set.tpRR[2] = 3.0;
-   g_set.trailingTP = true;
 
    if(!g_eng.Init(_Symbol, _Symbol, 777777, 20))
       return INIT_FAILED;
@@ -66,6 +68,41 @@ void OnTick()
    Print("UITEST: chart ", cw, "x", ch, "  panel ", px, ",", py, " ", pw, "x", ph,
          "  right=", px + pw, " bottom=", py + ph);
 
+   int bgX = (int)ObjectGetInteger(0,"UTM_P_BG",OBJPROP_XDISTANCE);
+   int bgW = (int)ObjectGetInteger(0,"UTM_P_BG",OBJPROP_XSIZE);
+   int bgH = (int)ObjectGetInteger(0,"UTM_P_BG",OBJPROP_YSIZE);
+   bool hit = g_pnl.HitTest(UTM_UI(15), UTM_UI(60));
+   Print("UITEST: scale=", DoubleToString(g_uiScale,2), " bgX=", bgX, " bgW=", bgW, " bgH=", bgH,
+         " contentLeft=", g_eng.ContentLeftX(), " hit=", hit);
+
+   int eX = (int)ObjectGetInteger(0,"UTM_P_E_COMM",OBJPROP_XDISTANCE);
+   int eW = (int)ObjectGetInteger(0,"UTM_P_E_COMM",OBJPROP_XSIZE);
+   int aX = (int)ObjectGetInteger(0,"UTM_P_BTN_COMMAUTO",OBJPROP_XDISTANCE);
+   int aW = (int)ObjectGetInteger(0,"UTM_P_BTN_COMMAUTO",OBJPROP_XSIZE);
+   int rX = (int)ObjectGetInteger(0,"UTM_P_BTN_COMMRISK",OBJPROP_XDISTANCE);
+   int rW = (int)ObjectGetInteger(0,"UTM_P_BTN_COMMRISK",OBJPROP_XSIZE);
+   bool commOk = (eX + eW <= aX) && (aX + aW <= rX) && (rX + rW <= px + pw - 6);
+
+   Print("UITEST: commRow edit=", eX, "+", eW, " auto=", aX, "+", aW, " risk=", rX, "+", rW,
+         " right=", px + pw, " ok=", commOk,
+         " readOnly=", (int)ObjectGetInteger(0,"UTM_P_E_COMM",OBJPROP_READONLY),
+         " value=", ObjectGetString(0,"UTM_P_E_COMM",OBJPROP_TEXT));
+
+   //--- panel 执行 / 退出 wiring (toggle)
+   g_pnl.OnClick("UTM_P_BTN_EXEC");
+   bool a1 = g_eng.ExecActive();
+   g_pnl.OnClick("UTM_P_BTN_EXEC");
+   bool a2 = g_eng.ExecActive();
+   Print("UITEST: execBtn -> active=", (a1 ? 1 : 0), " afterToggle=", (a2 ? 1 : 0), " (expect 1 then 0)");
+
+
+   g_pnl.OnClick("UTM_P_BTN_PRIV");
+   g_pnl.Refresh();
+   string pinfo = ObjectGetString(0, "UTM_P_INFO1", OBJPROP_TEXT);
+   Print("UITEST: privacy=[", pinfo, "] masked=", (StringFind(pinfo, "****") >= 0 ? 1 : 0));
+   string pins = ObjectGetString(0, "UTM_P_INS", OBJPROP_TEXT);
+   Print("UITEST: privacy today=[", pins, "]");
+   g_pnl.OnClick("UTM_P_BTN_PRIV");
    int total = ObjectsTotal(0, -1, -1);
    int bad = 0, edits = 0, buttons = 0, labels = 0, rects = 0;
 

@@ -11,7 +11,7 @@
 //|   - settings profiles, trade insights                           |
 //+------------------------------------------------------------------+
 #property copyright "UTM Manager"
-#property version   "1.00"
+#property version   "1.23"
 #property description "UTM 交易管理器 - MT5 手动下单与持仓管理工具"
 #property description "拖动入场/止损/止盈线，自动手数计算，分批止盈，"
 #property description "忽略点差执行，本地跟单。"
@@ -39,6 +39,8 @@ input bool                  InpUseProfile        = true;          // 启动时�
 input bool                  InpForceInputs       = false;         // 忽略已保存配置（用当前 EA 参数覆盖）
 input string                InpProfile           = "Default";     // 配置文件名
 input bool                  InpLoadPanel         = true;          // 启动时显示面板
+input double                InpUiScale           = 0.0;           // 界面缩放（0 = 自动；macOS 可用 2.0）
+input ENUM_UTM_ORDER_MODE   InpDefaultOrderMode  = UTM_ORDER_MARKET; // 默认执行模式（按 ESC 进入执行时）
 
 input group "=== UTM 交易管理器 : 风险 ==="
 input ENUM_UTM_RISK_MODE    InpRiskMode          = UTM_RISK_PERCENT; // 风险模式
@@ -55,7 +57,6 @@ input double                InpSLSize            = 20.0;          // 止损大�
 input ENUM_UTM_SL_UNIT      InpSLUnit            = UTM_SL_PIPS;   // 止损单位
 input double                InpSLMin             = 0.0;           // 最小止损
 input double                InpSLMax             = 0.0;           // 最大止损
-input int                   InpATRPeriod         = 14;            // ATR 周期
 input bool                  InpLockRR            = true;          // 拖动入场线时锁定盈亏比
 
 input group "=== UTM 交易管理器 : 止盈 ==="
@@ -67,9 +68,7 @@ input double                InpTP3RR             = 3.0;           // 止盈3 盈
 input double                InpTP3Pct            = 0.0;           // 止盈3 平仓%
 input double                InpTP4RR             = 4.0;           // 止盈4 盈亏比
 input double                InpTP4Pct            = 0.0;           // 止盈4 平仓%
-input bool                  InpTrailingTP        = false;         // 移动止盈
-input double                InpTrailTPRR         = 1.0;           // 移动止盈步长（R）
-input double                InpTrailTPPct        = 25.0;          // 移动止盈每步平仓%
+input bool                  InpServerSplitTP     = true;          // 多级止盈拆仓挂服务器（MT5 关掉也能止盈）
 input double                InpBEPlusRR          = 0.0;           // 保本额外锁定的盈亏比
 
 input group "=== UTM 交易管理器 : 持仓管理 ==="
@@ -99,7 +98,8 @@ input ENUM_LINE_STYLE       InpTPStyle           = STYLE_DOT;         // 止盈�
 input int                   InpTPWidth           = 1;                 // 止盈线粗细
 
 input group "=== UTM 交易管理器 : 其它 ==="
-input double                InpCommissionPerLot = 0.0;           // 每手佣金（往返）
+input bool                  InpCommissionAuto  = true;          // 自动检测佣金（品种规格 → 成交记录，都没有按 0）
+input double                InpCommissionPerLot = 0.0;           // 手动每手佣金（仅手动模式使用）
 input bool                  InpCommissionInRisk = false;         // 佣金计入风险（影响手数）
 input bool                  InpMemorySave       = false;         // 省内存模式
 input bool                  InpSounds           = true;          // 成交提示音
@@ -123,16 +123,14 @@ void LoadInputs()
    g_set.slUnit           = (int)InpSLUnit;
    g_set.slMin            = InpSLMin;
    g_set.slMax            = InpSLMax;
-   g_set.atrPeriod        = InpATRPeriod;
    g_set.lockRR           = InpLockRR;
 
    g_set.tpRR[0] = InpTP1RR;  g_set.tpPct[0] = InpTP1Pct;
    g_set.tpRR[1] = InpTP2RR;  g_set.tpPct[1] = InpTP2Pct;
    g_set.tpRR[2] = InpTP3RR;  g_set.tpPct[2] = InpTP3Pct;
    g_set.tpRR[3] = InpTP4RR;  g_set.tpPct[3] = InpTP4Pct;
-   g_set.trailingTP = InpTrailingTP;
-   g_set.trailTPRR  = InpTrailTPRR;
-   g_set.trailTPPct = InpTrailTPPct;
+   g_set.serverSplitTP = InpServerSplitTP;
+   g_set.defaultOrderMode = (int)InpDefaultOrderMode;
    g_set.beOffsetRR = InpBEPlusRR;
 
    g_set.formula          = InpFormula;
@@ -148,6 +146,7 @@ void LoadInputs()
 
    g_set.commissionPerLot = InpCommissionPerLot;
    g_set.commissionInRisk = InpCommissionInRisk;
+   g_set.commissionAuto   = InpCommissionAuto;
    g_set.memorySave       = InpMemorySave;
    g_set.sounds           = InpSounds;
    g_set.hudBg            = InpHudBackground;
@@ -226,6 +225,19 @@ int OnInit()
    ChartSetInteger(0, CHART_SHIFT, true);
    ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, false);   // enabled in execution mode
 
+   //--- interface scale (macOS / HiDPI renders the chart 2x too small)
+   double ui = InpUiScale;
+   if(ui <= 0.0)
+     {
+      int dpi = (int)TerminalInfoInteger(TERMINAL_SCREEN_DPI);
+      ui = (dpi > 96 ? (double)dpi / 96.0 : 1.0);
+     }
+   if(ui < 1.0) ui = 1.0;
+   if(ui > 3.0) ui = 3.0;
+   g_uiScale = ui;
+   if(g_uiScale > 1.0)
+      Print("[UTM] 界面缩放 = ", DoubleToString(g_uiScale, 2), "（屏幕 DPI ", TerminalInfoInteger(TERMINAL_SCREEN_DPI), "）");
+
    if(!g_engine.Init(sym, _Symbol, InpMagic, InpDeviation))
       return INIT_FAILED;
 
@@ -237,6 +249,7 @@ int OnInit()
 
    Print("[UTM] 管理器已启动 ", sym, " 魔术号 ", InpMagic,
          "（", (UTM_IsHedging() ? "对冲" : "净额"), "账户）");
+   Print("[UTM] 版本 ", UTM_VERSION, "（编译 ", UTM_BuildStamp(), "）");
    return INIT_SUCCEEDED;
   }
 
@@ -282,6 +295,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
    if(id == CHARTEVENT_CHART_CHANGE)
      {
       g_panel.Sync();   // rebuilt once by the timer, not on every drag event
+      g_engine.RefreshAll();
       return;
      }
 
