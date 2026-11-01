@@ -63,6 +63,28 @@ function Get-GitHubHeaders
     return $headers
 }
 
+function Get-LatestTagFromWeb([string]$RepoName)
+{
+    try
+    {
+        $resp = Invoke-WebRequest -Uri "https://github.com/$RepoName/releases/latest" -UseBasicParsing
+    }
+    catch
+    {
+        return ""
+    }
+
+    $final = ""
+    try { $final = [string]$resp.BaseResponse.RequestMessage.RequestUri } catch { }
+    if ([string]::IsNullOrWhiteSpace($final))
+    {
+        try { $final = [string]$resp.BaseResponse.ResponseUri } catch { }
+    }
+    if ($final -match '/tag/([^/?#]+)') { return $Matches[1] }
+    if ($resp.Content -match '/releases/tag/([^"''<> ]+)') { return $Matches[1] }
+    return ""
+}
+
 function Get-LatestTag([string]$RepoName)
 {
     $headers = Get-GitHubHeaders
@@ -77,9 +99,8 @@ function Get-LatestTag([string]$RepoName)
         Write-Verbose "Latest release lookup failed: $($_.Exception.Message)"
     }
 
-    $tags = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$RepoName/tags" `
-                                -Headers $headers -UseBasicParsing)
-    if ($tags.Count -gt 0) { return [string]$tags[0].name }
+    $tag = Get-LatestTagFromWeb $RepoName
+    if (-not [string]::IsNullOrWhiteSpace($tag)) { return $tag }
 
     throw "Could not determine the latest version of $RepoName."
 }
