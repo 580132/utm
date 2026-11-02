@@ -6,7 +6,7 @@
 #define __UTM_DEFINES_MQH__
 
 #define UTM_NAME            "UTM Manager"
-#define UTM_VERSION         "1.25"
+#define UTM_VERSION         "1.30"
 #define UTM_BUILD           __DATE__
 #define UTM_MAX_TP          4
 #define UTM_MAX_SPLIT       10

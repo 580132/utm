@@ -593,7 +593,7 @@ void CUtmPanel::BuildManagement(int &y)
    Button("UTM_P_BTN_SRVTP", x0, y, 128, 18,
           (g_set.serverSplitTP ? "服务器TP：拆仓" : "服务器TP：关"),
           (g_set.serverSplitTP ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
-          "开：市价单的多级止盈拆成多个仓位，各自止盈挂在服务器，MT5 关闭也能止盈；挂单或手数太小则整仓挂末级止盈");
+          "开：挂单按止盈级别拆成多张订单（各自挂服务器止盈）；市价单不拆，避免滑点造成入场价不一致，改为整仓挂末级止盈");
    Label("UTM_P_L_SRVTP", x0 + 132, y + 3, "拆不了挂末级", UTM_CLR_TEXT_DIM, 7, false);
    y += 21;
 
@@ -660,7 +660,7 @@ void CUtmPanel::BuildFooter(int &y)
    Button("UTM_P_BTN_MEM", x0, y, 52, 18,
           (g_set.memorySave ? "省内存" : "标准"),
           (g_set.memorySave ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,
-          "省内存：面板收起为折叠态，图表上也少画持仓文字和按钮");
+          "省内存：面板收起为折叠态（图表上的文字和按钮不受影响）");
    Button("UTM_P_BTN_SND", x0 + 56, y, 48, 18,
           (g_set.sounds ? "声音开" : "声音关"),
           (g_set.sounds ? UTM_CLR_ACCENT_DARK : UTM_CLR_BG_ALT), UTM_CLR_TEXT, 7,

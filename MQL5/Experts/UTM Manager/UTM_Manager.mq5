@@ -11,7 +11,7 @@
 //|   - settings profiles, trade insights                           |
 //+------------------------------------------------------------------+
 #property copyright "UTM Manager"
-#property version   "1.25"
+#property version   "1.30"
 #property description "UTM 交易管理器 - MT5 手动下单与持仓管理工具"
 #property description "拖动入场/止损/止盈线，自动手数计算，分批止盈，"
 #property description "忽略点差执行，本地跟单。"

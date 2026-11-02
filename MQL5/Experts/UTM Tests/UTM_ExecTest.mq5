@@ -368,6 +368,55 @@ void OnTick()
         }
      }
 
+   if(InpScenario == 14)
+     {
+      if(g_steps == 0)
+        {
+         g_set.serverSplitTP = true;
+         g_set.riskMode  = UTM_RISK_LOT;
+         g_set.riskValue = 0.30;
+         g_set.tpCount   = 3;
+         g_set.tpRR[0] = 1.0; g_set.tpRR[1] = 2.0; g_set.tpRR[2] = 3.0;
+         g_set.tpPct[0] = 50.0; g_set.tpPct[1] = 30.0; g_set.tpPct[2] = 20.0;
+         g_t.ActivateExec(POSITION_TYPE_BUY);
+         g_t.ExecSetMode(UTM_ORDER_LIMIT);
+         g_steps++;
+         return;
+        }
+      if(g_steps == 1)
+        {
+         g_t.ExecClickAt(ask - 40.0 * pip);
+         g_steps++;
+         return;
+        }
+      if(g_steps == 2)
+        {
+         g_t.ExecClickAt(ask - 70.0 * pip);
+         g_steps++;
+         return;
+        }
+      if(g_steps == 3)
+        {
+         int n = 0;
+         string info = "";
+         for(int i = OrdersTotal() - 1; i >= 0; i--)
+           {
+            ulong tk = OrderGetTicket(i);
+            if(tk == 0)
+               continue;
+            if(OrderGetInteger(ORDER_MAGIC) != g_t.Magic())
+               continue;
+            n++;
+            info += " [" + DoubleToString(OrderGetDouble(ORDER_VOLUME_CURRENT), 2)
+                    + " tp=" + DoubleToString(OrderGetDouble(ORDER_TP), _Digits) + "]";
+           }
+         Print("SRVPEND: orders=", n, info);
+         g_steps++;
+         g_done = true;
+         return;
+        }
+     }
+
    if(InpScenario == 10)
      {
       if(g_steps == 0)
@@ -434,7 +483,7 @@ void OnTick()
                   + " tp=" + DoubleToString(tr.tp[0], _Digits)
                   + "/" + DoubleToString(tr.tp[1], _Digits)
                   + "/" + DoubleToString(tr.tp[2], _Digits);
-         Print("SRVTP: positions=", n, info, eng);
+         Print("MKTTEST: positions=", n, " (market is never split, expect 1)", info, eng);
          st++;
          g_t.CloseAllPositions();
          g_done = true;

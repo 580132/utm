@@ -6,7 +6,7 @@
 #|                                                                   |
 #|  Usage:                                                           |
 #|    pwsh -ExecutionPolicy Bypass -File .\tools\install.ps1         |
-#|    .\tools\install.ps1 -Version v1.25 -IncludeTests               |
+#|    .\tools\install.ps1 -Version v1.30 -IncludeTests               |
 #+------------------------------------------------------------------+
 [CmdletBinding()]
 param(

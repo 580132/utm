@@ -643,10 +643,11 @@ void CUtmEngine::SyncTrades()
       bool alive = false;
       for(int k = 0; k < m_tr[i].splitCount; k++)
         {
-         if(PositionSelectByTicket(m_tr[i].splits[k]))
+         ulong stk = m_tr[i].splits[k];
+         if(stk > 0 && (PositionSelectByTicket(stk) || OrderSelect(stk)))
            {
             alive = true;
-            m_tr[i].ticket = m_tr[i].splits[k];
+            m_tr[i].ticket = stk;
             m_tr[i].splits[k] = 0;
             break;
            }
@@ -1065,8 +1066,8 @@ bool CUtmEngine::ClosePositionAt(const int index, const string reason, const dou
    //--- pending orders are cancelled, not closed
    if(m_tr[index].pending)
      {
-      if(!m_tr[index].virtualEntry && m_tr[index].ticket > 0)
-         m_trade.OrderDelete(m_tr[index].ticket);
+      if(!m_tr[index].virtualEntry)
+         DeleteTradeOrders(m_tr[index]);
       Print("[UTM] 已撤销挂单 #", m_tr[index].id);
       RemoveAt(index);
       SaveState(true);
@@ -1078,6 +1079,7 @@ bool CUtmEngine::ClosePositionAt(const int index, const string reason, const dou
 
    if(!partial)
      {
+      DeleteTradeOrders(m_tr[index]);   // cancel any slice still pending
       ulong tickets[];
       int n = CollectTickets(m_tr[index], tickets);
       for(int i = 0; i < n; i++)
@@ -1551,7 +1553,8 @@ bool CUtmEngine::OpenNewTrade(const int side, const double entry, const double s
 
    double sVols[];
    int    sLevels[];
-   bool   serverTP = (!invisible && !t.virtualEntry && !pending &&
+   //--- 只有挂单拆仓：市价入场有滑点，多张单的成交价会不一致
+   bool   serverTP = (!invisible && !t.virtualEntry && pending &&
                       BuildServerSlices(t, sVols, sLevels));
 
    double pctSum = 0.0;
@@ -2940,18 +2943,23 @@ void CUtmEngine::DrawTrade(const STrade &t)
      }
 
    //--- 文字标签
-   int yEntry = -1;
-   PriceToY((t.pending ? t.entry : t.posEntry), yEntry);
-
    int chartW = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
    int chartH = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
+
+   int yEntry = -1;
+   PriceToY((t.pending ? t.entry : t.posEntry), yEntry);
+   if(yEntry < 0 || yEntry > chartH)
+     {
+      //--- 入场价在当前可视区间之外：把摘要钉在对应的边缘，文字/按钮仍然可用
+      double px  = (t.pending ? t.entry : t.posEntry);
+      double cur = (t.type == POSITION_TYPE_BUY ? UTM_Bid(m_symbol) : UTM_Ask(m_symbol));
+      yEntry = (px > cur ? UTM_UI(30) : chartH - UTM_UI(6));
+     }
 
    int leftX = ContentLeftX();
    int rightX = MathMax(leftX + 260, chartW - 300);
 
    //--- 止损 / 止盈线自己的文字（持仓与挂单都显示）
-   if(!g_set.memorySave)
-     {
       if(t.sl > 0.0)
         {
          int sy = -1;
@@ -2985,13 +2993,6 @@ void CUtmEngine::DrawTrade(const STrade &t)
          else
             ObjectDelete(0, nt);
         }
-     }
-   else
-     {
-      ObjectDelete(0, pfx + "LBL_SL");
-      for(int i = 0; i < UTM_MAX_TP; i++)
-         ObjectDelete(0, pfx + "LBL_TP_" + IntegerToString(i));
-     }
 
 
    string left = "", right = "";
@@ -3024,7 +3025,7 @@ void CUtmEngine::DrawTrade(const STrade &t)
         }
      }
 
-   if(!g_set.memorySave && yEntry > 0 && yEntry < chartH)
+   if(yEntry > 0 && yEntry < chartH)
      {
       int lx = leftX;
       int ly = yEntry - UTM_UI(26);
@@ -3034,13 +3035,15 @@ void CUtmEngine::DrawTrade(const STrade &t)
       CreateLabel(pfx + "LBL_R", rightX, ly, right, UTM_CLR_TEXT_DIM, 8, false);
 
       //--- 快捷按钮
-      int bx = rightX + UTM_UI(190);
-      if(bx + UTM_UI(62) < chartW - 8)
-        {
+      int bx = chartW - UTM_UI(58);
+      if(bx < leftX + UTM_UI(20))
+         bx = leftX + UTM_UI(20);
+      if(!t.pending)
          CreateButton(pfx + "BTN_P", bx, yEntry - UTM_UI(24), UTM_UI(30), UTM_UI(16), "50%", UTM_CLR_BG_ALT, UTM_CLR_TEXT, 7);
-         CreateButton(pfx + "BTN_X", bx + UTM_UI(32), yEntry - UTM_UI(24), UTM_UI(18), UTM_UI(16), "X",
-                      (t.pending ? UTM_CLR_WARN : UTM_CLR_SELL), C'255,255,255', 7);
-        }
+      else
+         ObjectDelete(0, pfx + "BTN_P");
+      CreateButton(pfx + "BTN_X", bx + UTM_UI(32), yEntry - UTM_UI(24), UTM_UI(18), UTM_UI(16), "X",
+                   (t.pending ? UTM_CLR_WARN : UTM_CLR_SELL), C'255,255,255', 7);
      }
    else
      {
@@ -3255,7 +3258,7 @@ void CUtmEngine::DrawExec()
 
          int ty = -1;
          PriceToY(m_exec.tp[i], ty);
-         if(ty > 0 && !g_set.memorySave)
+         if(ty > 0)
       CreateLabel(nml, ContentLeftX(), ty + UTM_UI(3),
                         "止盈" + IntegerToString(i + 1) + "  " + DoubleToString(g_set.tpRR[i], 2) + "R  " +
                         DoubleToString(g_set.tpPct[i], 0) + "%",

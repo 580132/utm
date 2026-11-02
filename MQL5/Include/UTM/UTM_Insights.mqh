@@ -48,9 +48,55 @@ void UTM_InsightsLine(const int magic, string &txt, color &clr)
    int deals = 0, wins = 0;
    double profit = 0.0;
 
+   //--- 同一笔计划（注释 UTM-<id>）拆出来的多个仓位只算一笔
+   ulong  posId[256];
+   string posKey[256];
+   int    np = 0;
+
+   string keys[256];
+   double keyProfit[256];
+   int    nk = 0;
+
    if(HistorySelect(from, TimeCurrent()))
      {
       int total = HistoryDealsTotal();
+
+      //--- 先把每个仓位（position id）对应到计划号：拆仓的多个仓位共用 UTM-<id>
+      for(int i = 0; i < total; i++)
+        {
+         ulong ticket = HistoryDealGetTicket(i);
+         if(ticket == 0)
+            continue;
+         if((int)HistoryDealGetInteger(ticket, DEAL_MAGIC) != magic)
+            continue;
+         ulong pid = (ulong)HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
+         if(pid == 0)
+            continue;
+         int pi = -1;
+         for(int k = 0; k < np; k++)
+            if(posId[k] == pid)
+              {
+               pi = k;
+               break;
+              }
+         if(pi < 0 && np < 256)
+           {
+            pi = np;
+            posId[np] = pid;
+            posKey[np] = "";
+            np++;
+           }
+         if(pi >= 0)
+           {
+            string cm = HistoryDealGetString(ticket, DEAL_COMMENT);
+            if(StringFind(cm, "UTM-") == 0)
+               posKey[pi] = cm;
+            else if(posKey[pi] == "")
+               posKey[pi] = "P" + IntegerToString((long)pid);
+           }
+        }
+
+      //--- 再按计划号汇总今天的平仓盈亏
       for(int i = 0; i < total; i++)
         {
          ulong ticket = HistoryDealGetTicket(i);
@@ -59,17 +105,50 @@ void UTM_InsightsLine(const int magic, string &txt, color &clr)
          if((int)HistoryDealGetInteger(ticket, DEAL_MAGIC) != magic)
             continue;
          ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(ticket, DEAL_ENTRY);
-         if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT)
+         if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT && entry != DEAL_ENTRY_OUT_BY)
             continue;
          double p = HistoryDealGetDouble(ticket, DEAL_PROFIT)
                     + HistoryDealGetDouble(ticket, DEAL_COMMISSION)
                     + HistoryDealGetDouble(ticket, DEAL_SWAP);
-         deals++;
          profit += p;
-         if(p > 0.0)
-            wins++;
+
+         ulong pid = (ulong)HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
+         string key = "";
+         for(int k = 0; k < np; k++)
+            if(posId[k] == pid && posKey[k] != "")
+              {
+               key = posKey[k];
+               break;
+              }
+         if(key == "")
+           {
+            string cm = HistoryDealGetString(ticket, DEAL_COMMENT);
+            key = (StringFind(cm, "UTM-") == 0 ? cm : "P" + IntegerToString((long)pid));
+           }
+
+         int idx = -1;
+         for(int k = 0; k < nk; k++)
+            if(keys[k] == key)
+              {
+               idx = k;
+               break;
+              }
+         if(idx < 0 && nk < 256)
+           {
+            idx = nk;
+            keys[nk] = key;
+            keyProfit[nk] = 0.0;
+            nk++;
+           }
+         if(idx >= 0)
+            keyProfit[idx] += p;
         }
      }
+
+   deals = nk;
+   for(int k = 0; k < nk; k++)
+      if(keyProfit[k] > 0.0)
+         wins++;
 
    cachedDeals  = deals;
    cachedWins   = wins;
@@ -84,7 +163,7 @@ void UTM_InsightsLine(const int magic, string &txt, color &clr)
       return;
      }
 
-   cached = "今日 " + IntegerToString(deals) + " 笔  " +
+   cached = "今日 " + IntegerToString(deals) + " 笔  胜率 " +
             DoubleToString(wr, 0) + "%  " +
             UTM_Priv((profit >= 0.0 ? "+" : "") + UTM_FmtMoney(profit));
 
@@ -95,4 +174,3 @@ void UTM_InsightsLine(const int magic, string &txt, color &clr)
   }
 
 #endif // __UTM_INSIGHTS_MQH__
-//+------------------------------------------------------------------+
